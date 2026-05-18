@@ -1,0 +1,18 @@
+{
+  "name": "Nexus Appels 3CX SALC",
+  "short_name": "Nexus",
+  "description": "Dashboard appels 3CX SALC",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "phone-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

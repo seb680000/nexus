@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Nexus phone">
+  <rect width="512" height="512" rx="112" fill="#020617"/>
+  <path d="M349 314c-14-1-28-3-42-8-7-2-14 0-19 5l-31 31c-39-21-70-52-91-91l31-31c5-5 7-12 5-19-5-14-7-28-8-42-1-10-9-18-19-18h-49c-11 0-20 9-19 20 10 134 117 241 251 251 11 1 20-8 20-19v-49c0-10-8-19-19-20z" fill="#ffffff"/>
+  <path d="M320 126c18 5 35 14 49 28s23 31 28 49" fill="none" stroke="#ec4899" stroke-width="26" stroke-linecap="round"/>
+  <path d="M312 190c9 3 17 8 24 15s12 15 15 24" fill="none" stroke="#facc15" stroke-width="22" stroke-linecap="round"/>
+</svg>
