@@ -138,6 +138,38 @@ on public.nexus_view_permissions
 for delete to authenticated
 using (public.nexus_current_role() = 'superadmin');
 
+create table if not exists public.nexus_password_reset_requests (
+  id bigserial primary key,
+  email text not null,
+  requester_email text,
+  user_agent text,
+  page_url text,
+  status text not null default 'requested',
+  requested_at timestamptz not null default now()
+);
+
+alter table public.nexus_password_reset_requests enable row level security;
+
+drop policy if exists nexus_password_reset_requests_insert on public.nexus_password_reset_requests;
+drop policy if exists nexus_password_reset_requests_read_superadmin on public.nexus_password_reset_requests;
+drop policy if exists nexus_password_reset_requests_update_superadmin on public.nexus_password_reset_requests;
+
+create policy nexus_password_reset_requests_insert
+on public.nexus_password_reset_requests
+for insert to anon, authenticated
+with check (length(trim(email)) > 3);
+
+create policy nexus_password_reset_requests_read_superadmin
+on public.nexus_password_reset_requests
+for select to authenticated
+using (public.nexus_current_role() = 'superadmin');
+
+create policy nexus_password_reset_requests_update_superadmin
+on public.nexus_password_reset_requests
+for update to authenticated
+using (public.nexus_current_role() = 'superadmin')
+with check (public.nexus_current_role() = 'superadmin');
+
 create table if not exists public.call_import_rows (
   id bigserial primary key,
   organization_id text not null default 'salc',
