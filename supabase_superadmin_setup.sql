@@ -195,7 +195,8 @@ using (
 insert into public.nexus_user_access (email, role, status)
 values
   ('sebastien@groupe-salc.fr','superadmin','active'),
-  ('sebastien.schmitt57@gmail.com','superadmin','active')
+  ('sebastien.schmitt57@gmail.com','superadmin','active'),
+  ('sebastien.schmitt@hotmail.fr','superadmin','active')
 on conflict (email) do update
 set role = 'superadmin',
     status = 'active',
@@ -204,7 +205,8 @@ set role = 'superadmin',
 insert into public.nexus_profiles (email, first_name, last_name, display_name)
 values
   ('sebastien@groupe-salc.fr','Sebastien','Schmitt','Sebastien Schmitt'),
-  ('sebastien.schmitt57@gmail.com','Sebastien','Schmitt','Sebastien Schmitt')
+  ('sebastien.schmitt57@gmail.com','Sebastien','Schmitt','Sebastien Schmitt'),
+  ('sebastien.schmitt@hotmail.fr','Sebastien','Schmitt','Sebastien Schmitt')
 on conflict (email) do update
 set first_name = excluded.first_name,
     last_name = excluded.last_name,
