@@ -138,6 +138,24 @@ on public.nexus_view_permissions
 for delete to authenticated
 using (public.nexus_current_role() = 'superadmin');
 
+create table if not exists public.call_import_rows (
+  id bigserial primary key,
+  organization_id text not null default 'salc',
+  user_id uuid default auth.uid(),
+  created_by uuid default auth.uid(),
+  row_hash text not null,
+  call_id text,
+  call_time timestamptz,
+  client text,
+  operator_name text,
+  phone text,
+  direction text,
+  status text,
+  call_type text,
+  raw jsonb not null,
+  created_at timestamptz not null default now()
+);
+
 alter table public.call_import_rows
   add column if not exists organization_id text not null default 'salc';
 
