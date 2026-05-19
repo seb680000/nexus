@@ -195,6 +195,9 @@ alter table public.call_import_rows
   add column if not exists created_by uuid default auth.uid();
 
 drop index if exists public.call_import_rows_org_hash_idx;
+alter table public.call_import_rows
+  drop constraint if exists call_import_rows_user_id_row_hash_key;
+
 create unique index if not exists call_import_rows_org_hash_idx
 on public.call_import_rows (organization_id, row_hash);
 
@@ -212,14 +215,17 @@ drop policy if exists call_rows_delete_admin on public.call_import_rows;
 create policy call_rows_read_active
 on public.call_import_rows
 for select to authenticated
-using (organization_id = 'salc' and public.nexus_current_role() is not null);
+using (
+  organization_id = 'salc'
+  and public.nexus_current_role() in ('superadmin','admin','manager','user')
+);
 
 create policy call_rows_insert_active
 on public.call_import_rows
 for insert to authenticated
 with check (
   organization_id = 'salc'
-  and public.nexus_current_role() in ('superadmin','admin','manager','user')
+  and public.nexus_current_role() in ('superadmin','admin')
 );
 
 create policy call_rows_update_admin
@@ -227,11 +233,11 @@ on public.call_import_rows
 for update to authenticated
 using (
   organization_id = 'salc'
-  and public.nexus_current_role() in ('superadmin','admin','manager')
+  and public.nexus_current_role() in ('superadmin','admin')
 )
 with check (
   organization_id = 'salc'
-  and public.nexus_current_role() in ('superadmin','admin','manager')
+  and public.nexus_current_role() in ('superadmin','admin')
 );
 
 create policy call_rows_delete_admin
