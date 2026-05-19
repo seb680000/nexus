@@ -113,6 +113,8 @@ for delete to authenticated
 using (public.nexus_current_role() = 'superadmin');
 
 drop policy if exists nexus_view_permissions_read on public.nexus_view_permissions;
+drop policy if exists nexus_view_permissions_read_own on public.nexus_view_permissions;
+drop policy if exists nexus_view_permissions_read_superadmin on public.nexus_view_permissions;
 drop policy if exists nexus_view_permissions_insert_superadmin on public.nexus_view_permissions;
 drop policy if exists nexus_view_permissions_update_superadmin on public.nexus_view_permissions;
 drop policy if exists nexus_view_permissions_delete_superadmin on public.nexus_view_permissions;
@@ -120,7 +122,12 @@ drop policy if exists nexus_view_permissions_delete_superadmin on public.nexus_v
 create policy nexus_view_permissions_read
 on public.nexus_view_permissions
 for select to authenticated
-using (lower(email) = public.nexus_current_email() or public.nexus_current_role() = 'superadmin');
+using (lower(email) = public.nexus_current_email());
+
+create policy nexus_view_permissions_read_superadmin
+on public.nexus_view_permissions
+for select to authenticated
+using (public.nexus_current_role() = 'superadmin');
 
 create policy nexus_view_permissions_insert_superadmin
 on public.nexus_view_permissions
