@@ -61,8 +61,10 @@ returns boolean
 language sql
 stable
 security definer
-set search_path = public
+set search_path = public, auth
 as $$
+  -- Acces base d'appels collectif : seul le statut actif compte.
+  -- Le role sert uniquement aux permissions applicatives, pas a la lecture des appels.
   select
     public.nexus_current_email() in (
       'sebastien@groupe-salc.fr',
@@ -248,6 +250,9 @@ using (
   organization_id = 'salc'
   and public.nexus_has_active_access()
 );
+
+comment on policy call_rows_read_active on public.call_import_rows
+is 'Tout compte Nexus actif peut lire l historique collectif des appels. Le role ne bloque pas la lecture Supabase.';
 
 create policy call_rows_insert_active
 on public.call_import_rows
