@@ -65,19 +65,13 @@ set search_path = public, auth
 as $$
   -- Acces base d'appels collectif : seul le statut actif compte.
   -- Le role sert uniquement aux permissions applicatives, pas a la lecture des appels.
-  select
-    public.nexus_current_email() in (
-      'sebastien@groupe-salc.fr',
-      'sebastien.schmitt57@gmail.com',
-      'sebastien.schmitt@hotmail.fr'
-    )
-    or exists (
-      select 1
-      from public.nexus_user_access
-      where lower(email) = public.nexus_current_email()
-        and status = 'active'
-      limit 1
-    );
+  select exists (
+    select 1
+    from public.nexus_user_access
+    where lower(email) = public.nexus_current_email()
+      and status = 'active'
+    limit 1
+  );
 $$;
 
 alter table public.nexus_user_access enable row level security;
@@ -146,12 +140,7 @@ drop policy if exists nexus_view_permissions_delete_superadmin on public.nexus_v
 create policy nexus_view_permissions_read
 on public.nexus_view_permissions
 for select to authenticated
-using (lower(email) = public.nexus_current_email());
-
-create policy nexus_view_permissions_read_superadmin
-on public.nexus_view_permissions
-for select to authenticated
-using (public.nexus_current_role() = 'superadmin');
+using (lower(email) = public.nexus_current_email() or public.nexus_current_role() = 'superadmin');
 
 create policy nexus_view_permissions_insert_superadmin
 on public.nexus_view_permissions
@@ -320,6 +309,53 @@ begin
 end;
 $$;
 
+create or replace function public.nexus_get_my_access()
+returns table(
+  email text,
+  role text,
+  status text,
+  first_name text,
+  last_name text,
+  display_name text,
+  avatar_url text,
+  permissions jsonb
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  return query
+  select
+    a.email,
+    a.role,
+    a.status,
+    coalesce(p.first_name, '') as first_name,
+    coalesce(p.last_name, '') as last_name,
+    coalesce(p.display_name, '') as display_name,
+    coalesce(p.avatar_url, '') as avatar_url,
+    coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'view_id', vp.view_id,
+          'view_label', vp.view_label,
+          'can_view', vp.can_view,
+          'can_edit', vp.can_edit
+        )
+        order by vp.view_id
+      ) filter (where vp.view_id is not null),
+      '[]'::jsonb
+    ) as permissions
+  from public.nexus_user_access a
+  left join public.nexus_profiles p on lower(p.email) = lower(a.email)
+  left join public.nexus_view_permissions vp on lower(vp.email) = lower(a.email)
+  where lower(a.email) = public.nexus_current_email()
+    and a.status = 'active'
+  group by a.email, a.role, a.status, p.first_name, p.last_name, p.display_name, p.avatar_url;
+end;
+$$;
+
 create policy call_rows_insert_active
 on public.call_import_rows
 for insert to authenticated
@@ -375,6 +411,7 @@ grant execute on function public.nexus_current_role() to authenticated;
 grant execute on function public.nexus_has_active_access() to authenticated;
 grant execute on function public.nexus_latest_call_time(text) to authenticated;
 grant execute on function public.nexus_read_call_rows(text, timestamptz, timestamptz, integer, integer, boolean) to authenticated;
+grant execute on function public.nexus_get_my_access() to authenticated;
 grant select, insert, update, delete on public.nexus_user_access to authenticated;
 grant select, insert, update, delete on public.nexus_profiles to authenticated;
 grant select, insert, update, delete on public.nexus_view_permissions to authenticated;
