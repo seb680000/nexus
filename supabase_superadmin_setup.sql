@@ -56,6 +56,28 @@ as $$
   limit 1;
 $$;
 
+create or replace function public.nexus_has_active_access()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    public.nexus_current_email() in (
+      'sebastien@groupe-salc.fr',
+      'sebastien.schmitt57@gmail.com',
+      'sebastien.schmitt@hotmail.fr'
+    )
+    or exists (
+      select 1
+      from public.nexus_user_access
+      where lower(email) = public.nexus_current_email()
+        and status = 'active'
+      limit 1
+    );
+$$;
+
 alter table public.nexus_user_access enable row level security;
 alter table public.nexus_profiles enable row level security;
 alter table public.nexus_view_permissions enable row level security;
@@ -224,7 +246,7 @@ on public.call_import_rows
 for select to authenticated
 using (
   organization_id = 'salc'
-  and public.nexus_current_role() in ('superadmin','admin','manager','user')
+  and public.nexus_has_active_access()
 );
 
 create policy call_rows_insert_active
@@ -275,3 +297,15 @@ set first_name = excluded.first_name,
     last_name = excluded.last_name,
     display_name = excluded.display_name,
     updated_at = now();
+
+grant usage on schema public to anon, authenticated;
+grant execute on function public.nexus_current_email() to anon, authenticated;
+grant execute on function public.nexus_current_role() to authenticated;
+grant execute on function public.nexus_has_active_access() to authenticated;
+grant select, insert, update, delete on public.nexus_user_access to authenticated;
+grant select, insert, update, delete on public.nexus_profiles to authenticated;
+grant select, insert, update, delete on public.nexus_view_permissions to authenticated;
+grant select, insert, update on public.nexus_password_reset_requests to authenticated;
+grant insert on public.nexus_password_reset_requests to anon;
+grant select, insert, update, delete on public.call_import_rows to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
