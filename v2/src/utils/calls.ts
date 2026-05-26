@@ -1,6 +1,7 @@
 import type { CallbackInfo, CallbackSettings, CallPath, DetailItem, DurationFilter, Row, Service } from '../types';
 import { dayKey, frDateTime, inBusinessHours } from './dates';
 import { secondsFromDuration } from './format';
+import { frenchStatus, frenchStep } from './labels';
 
 export const OUTBOUND_MIN_TALK_SECONDS = 20;
 
@@ -211,8 +212,8 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
         id: `${call.callId}-wait`,
         date: frDateTime(call.date),
         ...base,
-        step: 'File attente 3CX',
-        status: call.abandoned && !call.treated ? 'Abandonne' : 'Transfere',
+        step: frenchStep('File attente 3CX'),
+        status: call.abandoned && !call.treated ? frenchStatus('Abandoned') : frenchStatus('Transferred'),
         wait: call.wait,
         talk: 0,
       },
@@ -223,8 +224,8 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
         id: `${call.callId}-talk`,
         date: frDateTime(call.date),
         ...base,
-        step: 'Conversation operatrice',
-        status: 'Answered',
+        step: frenchStep('Conversation operatrice'),
+        status: frenchStatus('Answered'),
         wait: 0,
         talk: call.talk,
       });
@@ -235,8 +236,8 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
         id: `${call.callId}-lost`,
         date: frDateTime(call.date),
         ...base,
-        step: 'Fin appel',
-        status: 'Unanswered',
+        step: frenchStep('Fin appel'),
+        status: frenchStatus('Unanswered'),
         wait: 0,
         talk: 0,
       });
@@ -255,8 +256,8 @@ export function outboundDetails(rows: Row[]): DetailItem[] {
       client: row.client,
       operator: row.operator || 'Non identifie',
       phone: row.phone,
-      step: 'Appel sortant',
-      status: row.status,
+      step: frenchStep('Outbound'),
+      status: frenchStatus(row.status),
       wait: 0,
       talk: row.talking,
     }));
@@ -298,10 +299,10 @@ export function getUserCallback(call: CallPath, allRows: Row[], minUserCallback:
 
 export function statusForAbandon(call: CallPath, operatorCallback: CallbackInfo, userCallback: CallbackInfo) {
   if (call.wait < 5) return 'Appel de moins de 5 secondes';
-  if (operatorCallback && userCallback) return 'Traite + rappel utilisateur';
-  if (operatorCallback) return 'Traite';
-  if (userCallback) return 'Utilisateur a deja rappele';
-  return 'A rappeler';
+  if (operatorCallback && userCallback) return 'Traité + rappel utilisateur';
+  if (operatorCallback) return 'Traité';
+  if (userCallback) return 'Utilisateur a déjà rappelé';
+  return 'À rappeler';
 }
 
 export function summarize(calls: CallPath[], rawRows: Row[], callback: CallbackSettings) {
