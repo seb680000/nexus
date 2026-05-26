@@ -80,7 +80,7 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
         <StatCard
           title="Sortants clients"
           value={stats.outbound}
-          subtitle="repondus >= 10 sec"
+          subtitle="repondus >= 20 sec"
           onClick={() => setDetail(outboundDetails(stats.outboundRows))}
         />
         <StatCard
