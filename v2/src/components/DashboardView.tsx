@@ -1,10 +1,24 @@
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { CallPath, DetailItem, Row, ViewKey } from '../types';
+import type { CallPath, ChartMetric, DetailItem, Row, ViewKey } from '../types';
 import { callDetails, outboundDetails, totalDays, dateRangeLabel } from '../utils/calls';
 import { frDate } from '../utils/dates';
 import { formatDuration } from '../utils/format';
 import { Panel } from './Panel';
 import { StatCard } from './StatCard';
+
+export const chartMetricOptions: { key: ChartMetric; label: string }[] = [
+  { key: 'invoiceTotal', label: 'Total a facturer' },
+  { key: 'treated', label: 'Appels traites' },
+  { key: 'abandoned', label: 'Abandonnes' },
+  { key: 'total', label: 'Total entrants' },
+  { key: 'outbound', label: 'Sortants clients' },
+  { key: 'callbacksDone', label: 'Rappels realises' },
+  { key: 'callbacksRemaining', label: 'Rappels restants' },
+  { key: 'internal', label: 'Inter-collab.' },
+  { key: 'maxWait', label: 'Attente max' },
+  { key: 'avgAbandonedWait', label: 'Attente moy.' },
+  { key: 'avgTalk', label: 'Parole moy.' },
+];
 
 type DashboardStats = {
   calls: CallPath[];
@@ -30,11 +44,15 @@ type DashboardViewProps = {
   stats: DashboardStats;
   rows: Row[];
   chartData: Array<Record<string, string | number>>;
+  chartMetric: ChartMetric;
+  setChartMetric: (metric: ChartMetric) => void;
   setDetail: (rows: DetailItem[]) => void;
   setActiveView: (view: ViewKey) => void;
 };
 
-export function DashboardView({ stats, rows, chartData, setDetail, setActiveView }: DashboardViewProps) {
+export function DashboardView({ stats, rows, chartData, chartMetric, setChartMetric, setDetail, setActiveView }: DashboardViewProps) {
+  const selectedMetric = chartMetricOptions.find((option) => option.key === chartMetric)?.label || 'Total a facturer';
+
   return (
     <>
       <section className="cards">
@@ -84,15 +102,24 @@ export function DashboardView({ stats, rows, chartData, setDetail, setActiveView
       </section>
 
       <Panel title="Courbe par periode">
+        <section className="filters">
+          <label>
+            Indicateur courbe
+            <select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)}>
+              {chartMetricOptions.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </section>
+
         <ResponsiveContainer width="100%" height={320}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" />
             <YAxis />
             <Tooltip />
-            <Line type="linear" dataKey="total" name="Total entrants" dot={false} />
-            <Line type="linear" dataKey="traites" name="Traites" dot={false} />
-            <Line type="linear" dataKey="abandonnes" name="Abandonnes" dot={false} />
+            <Line type="linear" dataKey="value" name={selectedMetric} dot={false} />
           </LineChart>
         </ResponsiveContainer>
       </Panel>
