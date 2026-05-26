@@ -1,6 +1,8 @@
 import type { CallbackInfo, CallbackSettings, CallPath, DetailItem, DurationFilter, Row, Service } from '../types';
 import { dayKey, frDateTime, inBusinessHours } from './dates';
-import { formatClock, secondsFromDuration } from './format';
+import { secondsFromDuration } from './format';
+
+export const OUTBOUND_MIN_TALK_SECONDS = 20;
 
 const blockedNames = [
   'support',
@@ -246,7 +248,7 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
 
 export function outboundDetails(rows: Row[]): DetailItem[] {
   return rows
-    .filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 10)
+    .filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS)
     .map((row) => ({
       id: row.id,
       date: frDateTime(row.time),
@@ -307,7 +309,7 @@ export function summarize(calls: CallPath[], rawRows: Row[], callback: CallbackS
   const abandoned = calls.filter((call) => call.abandoned);
   const total = treated.length + abandoned.length;
   const business = rawRows.filter((row) => inBusinessHours(row.time));
-  const outboundRows = business.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 10);
+  const outboundRows = business.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS);
   const eligible = abandoned.filter(
     (call) => callback.families.includes(call.service) && call.wait > callback.minAbandon
   );
