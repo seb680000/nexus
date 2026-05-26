@@ -20,6 +20,28 @@ export const chartMetricOptions: { key: ChartMetric; label: string }[] = [
   { key: 'avgTalk', label: 'Parole moy.' },
 ];
 
+export function isDurationMetric(metric: ChartMetric) {
+  return metric === 'maxWait' || metric === 'avgAbandonedWait' || metric === 'avgTalk';
+}
+
+export function formatChartValue(value: unknown, metric: ChartMetric) {
+  const numericValue = Number(value || 0);
+
+  if (!isDurationMetric(metric)) {
+    return numericValue.toLocaleString('fr-FR');
+  }
+
+  const total = Math.max(0, Math.round(numericValue));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m${String(seconds).padStart(2, '0')}`;
+}
+
 type DashboardStats = {
   calls: CallPath[];
   treated: CallPath[];
@@ -117,8 +139,8 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" />
-            <YAxis />
-            <Tooltip />
+            <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
+            <Tooltip formatter={(value) => [formatChartValue(value, chartMetric), selectedMetric]} />
             <Line type="linear" dataKey="value" name={selectedMetric} dot={false} />
           </LineChart>
         </ResponsiveContainer>
