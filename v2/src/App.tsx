@@ -209,7 +209,7 @@ function App() {
   const [abandonedDuration, setAbandonedDuration] = useState<DurationFilter>('all');
   const [callbackFamilies, setCallbackFamilies] = useState<Service[]>(['premium']);
   const [minAbandon, setMinAbandon] = useState(5);
-  const [minCallback, setMinCallback] = useState(10);
+  const [minCallback, setMinCallback] = useState(20);
   const [minUserCallback, setMinUserCallback] = useState(10);
 
   const allCalls = useMemo(() => buildCalls(rows), [rows]);
