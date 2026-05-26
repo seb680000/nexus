@@ -1,0 +1,101 @@
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { CallPath, DetailItem, Row, ViewKey } from '../types';
+import { callDetails, outboundDetails, totalDays, dateRangeLabel } from '../utils/calls';
+import { frDate } from '../utils/dates';
+import { formatDuration } from '../utils/format';
+import { Panel } from './Panel';
+import { StatCard } from './StatCard';
+
+type DashboardStats = {
+  calls: CallPath[];
+  treated: CallPath[];
+  abandoned: CallPath[];
+  total: number;
+  maxWait: number;
+  avgAbandonedWait: number;
+  avgTalk: number;
+  abandonedOver5: number;
+  premiumOver5: number;
+  forfaitOver5: number;
+  internal: number;
+  outbound: number;
+  outboundRows: Row[];
+  callbacksDone: number;
+  callbacksRemaining: number;
+  invoiceTotal: number;
+  answerRate: number;
+};
+
+type DashboardViewProps = {
+  stats: DashboardStats;
+  rows: Row[];
+  chartData: Array<Record<string, string | number>>;
+  setDetail: (rows: DetailItem[]) => void;
+  setActiveView: (view: ViewKey) => void;
+};
+
+export function DashboardView({ stats, rows, chartData, setDetail, setActiveView }: DashboardViewProps) {
+  return (
+    <>
+      <section className="cards">
+        <StatCard title="Dates CSV" value={totalDays(rows)} subtitle={dateRangeLabel(rows, frDate)} />
+        <StatCard
+          title="Appels traites"
+          value={`${stats.treated.length} / ${stats.total}`}
+          subtitle={`${stats.answerRate}% des entrants`}
+          onClick={() => setDetail(callDetails(stats.treated))}
+        />
+        <StatCard
+          title="Abandonnes"
+          value={stats.abandoned.length}
+          subtitle={`Dont ${stats.abandonedOver5} appel(s) de plus de 5 secondes · Premium ${stats.premiumOver5} · Forfait ${stats.forfaitOver5}`}
+          tone="danger"
+          onClick={() => setActiveView('abandoned')}
+        />
+        <StatCard
+          title="Total entrants"
+          value={stats.total}
+          subtitle="traites + abandonnes"
+          onClick={() => setDetail(callDetails(stats.calls))}
+        />
+        <StatCard title="Total a facturer" value={stats.invoiceTotal} subtitle="clients + rappels + sortants" />
+        <StatCard
+          title="Sortants clients"
+          value={stats.outbound}
+          subtitle="repondus >= 10 sec"
+          onClick={() => setDetail(outboundDetails(stats.outboundRows))}
+        />
+        <StatCard
+          title="Rappels realises"
+          value={stats.callbacksDone}
+          subtitle={`${stats.callbacksDone} rappel(s) operatrice`}
+          onClick={() => setActiveView('abandoned')}
+        />
+        <StatCard
+          title="Rappels restants"
+          value={stats.callbacksRemaining}
+          subtitle="selon parametrage actif"
+          onClick={() => setActiveView('settings')}
+        />
+        <StatCard title="Inter-collab." value={stats.internal} subtitle="appels internes" />
+        <StatCard title="Attente max" value={formatDuration(stats.maxWait)} subtitle="abandonnes" />
+        <StatCard title="Attente moy." value={formatDuration(stats.avgAbandonedWait)} subtitle="abandonnes" />
+        <StatCard title="Parole moy." value={formatDuration(stats.avgTalk)} subtitle={`${stats.treated.length} conversations`} />
+      </section>
+
+      <Panel title="Courbe par periode">
+        <ResponsiveContainer width="100%" height={320}>
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip />
+            <Line type="linear" dataKey="total" name="Total entrants" dot={false} />
+            <Line type="linear" dataKey="traites" name="Traites" dot={false} />
+            <Line type="linear" dataKey="abandonnes" name="Abandonnes" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </Panel>
+    </>
+  );
+}
