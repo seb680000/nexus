@@ -9424,26 +9424,27 @@ async function fetchLatestCallDateFromSupabase(){
   const client=getNexusSupabaseClient();
   if(!client || !nexusSupabaseSession) return null;
   try{
-    const {data,error}=await client.rpc("nexus_latest_call_time",{p_organization_id:NEXUS_ORGANIZATION_ID});
-    if(error && !nexusRpcUnavailable(error)) throw error;
-    if(error){
-      const fallback=await client
-        .from(NEXUS_SUPABASE_TABLE)
-        .select("call_time")
-        .eq("organization_id",NEXUS_ORGANIZATION_ID)
-        .not("call_time","is",null)
-        .order("call_time",{ascending:false})
-        .limit(1)
-        .maybeSingle();
-      if(fallback.error) throw fallback.error;
-      nexusLatestCloudCallDate=fallback.data?.call_time ? new Date(fallback.data.call_time) : null;
-    }else{
-      nexusLatestCloudCallDate=data ? new Date(data) : null;
-    }
+    const direct=await client
+      .from(NEXUS_SUPABASE_TABLE)
+      .select("call_time")
+      .eq("organization_id",NEXUS_ORGANIZATION_ID)
+      .not("call_time","is",null)
+      .order("call_time",{ascending:false})
+      .limit(1)
+      .maybeSingle();
+    if(direct.error) throw direct.error;
+    nexusLatestCloudCallDate=direct.data?.call_time ? new Date(direct.data.call_time) : null;
     return nexusLatestCloudCallDate;
   }catch(err){
-    console.warn("Dernière date Supabase indisponible", err);
-    return null;
+    try{
+      const {data,error}=await client.rpc("nexus_latest_call_time",{p_organization_id:NEXUS_ORGANIZATION_ID});
+      if(error) throw error;
+      nexusLatestCloudCallDate=data ? new Date(data) : null;
+      return nexusLatestCloudCallDate;
+    }catch(rpcErr){
+      console.warn("Dernière date Supabase indisponible", err, rpcErr);
+      return null;
+    }
   }
 }
 async function loadRowsFromSupabase(options={}){
@@ -9459,10 +9460,6 @@ async function loadRowsFromSupabase(options={}){
     for(let attempt=1;attempt<=3;attempt++){
       try{
         try{
-          data=await nexusRpcReadCallRows(client,{range,from,pageSize,descending:!!options.descending});
-          error=null;
-        }catch(rpcErr){
-          if(!nexusRpcUnavailable(rpcErr)) console.warn("Lecture RPC Supabase indisponible, essai lecture table directe", rpcErr);
           let query=client
             .from(NEXUS_SUPABASE_TABLE)
             .select("raw,call_time")
@@ -9477,6 +9474,11 @@ async function loadRowsFromSupabase(options={}){
           const result=await query;
           data=result.data;
           error=result.error;
+          if(error) throw error;
+        }catch(tableErr){
+          console.warn("Lecture table Supabase indisponible, essai RPC", tableErr);
+          data=await nexusRpcReadCallRows(client,{range,from,pageSize,descending:!!options.descending});
+          error=null;
         }
       }catch(fetchErr){
         error=fetchErr;
@@ -9504,18 +9506,18 @@ async function loadLatestVisibleSupabaseRows(limit=5000){
   if(!client || !nexusCanReadSharedCalls()) return [];
   let data=null;
   try{
-    data=await nexusRpcReadCallRows(client,{range:null,from:0,pageSize:limit,descending:true});
-  }catch(rpcErr){
-    if(!nexusRpcUnavailable(rpcErr)) console.warn("Lecture RPC dernière journée indisponible, essai lecture table directe", rpcErr);
-    const fallback=await client
+    const direct=await client
       .from(NEXUS_SUPABASE_TABLE)
       .select("raw,call_time")
       .eq("organization_id",NEXUS_ORGANIZATION_ID)
       .not("call_time","is",null)
       .order("call_time",{ascending:false,nullsFirst:false})
       .range(0,Math.max(0,limit-1));
-    if(fallback.error) throw fallback.error;
-    data=fallback.data || [];
+    if(direct.error) throw direct.error;
+    data=direct.data || [];
+  }catch(tableErr){
+    console.warn("Lecture table dernière journée indisponible, essai RPC", tableErr);
+    data=await nexusRpcReadCallRows(client,{range:null,from:0,pageSize:limit,descending:true});
   }
   const rows=(data || []).map(r=>r.raw).filter(Boolean);
   const latest=(data || []).map(r=>r.call_time ? new Date(r.call_time) : null).filter(d=>d && !isNaN(d.getTime())).sort((a,b)=>b-a)[0] || null;

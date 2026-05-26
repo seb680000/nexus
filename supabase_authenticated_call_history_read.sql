@@ -1,15 +1,58 @@
--- Nexus / SALC - lecture collective pour tous les comptes Nexus connectes
+-- Nexus / SALC - ouverture de lecture collective des imports 3CX
 -- A executer dans Supabase > SQL Editor > Run.
 --
--- Effet :
--- - tous les utilisateurs connectes Supabase Auth peuvent lire public.call_import_rows ;
--- - le role Nexus ne bloque plus la lecture de l'historique des appels ;
--- - les visiteurs anonymes ne recoivent pas de droit de lecture.
+-- Objectif fonctionnel :
+-- - un compte Supabase authentifie dans le portail Nexus lit l'historique collectif ;
+-- - les imports faits par sebastien.schmitt@hotmail.fr ou tout autre admin sont visibles ;
+-- - aucune condition sur role, user_id, created_by ou email ne bloque la lecture ;
+-- - les droits de pages restent geres uniquement dans l'application Nexus.
 
+create table if not exists public.call_import_rows (
+  id bigserial primary key,
+  organization_id text not null default 'salc',
+  user_id uuid default auth.uid(),
+  created_by uuid default auth.uid(),
+  row_hash text not null,
+  call_id text,
+  call_time timestamptz,
+  client text,
+  operator_name text,
+  phone text,
+  direction text,
+  status text,
+  call_type text,
+  raw jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.call_import_rows
+  add column if not exists organization_id text not null default 'salc';
+
+alter table public.call_import_rows
+  add column if not exists user_id uuid default auth.uid();
+
+alter table public.call_import_rows
+  add column if not exists created_by uuid default auth.uid();
+
+alter table public.call_import_rows
+  add column if not exists raw jsonb;
+
+update public.call_import_rows
+set organization_id = 'salc'
+where organization_id is null or organization_id = '';
+
+drop index if exists public.call_import_rows_org_hash_idx;
+create unique index if not exists call_import_rows_org_hash_idx
+on public.call_import_rows (organization_id, row_hash);
+
+-- Point important : on retire le verrou RLS sur l'historique d'appels.
+-- La securite fonctionnelle se fait dans Nexus par les droits d'onglets.
 alter table public.call_import_rows disable row level security;
 
-grant usage on schema public to authenticated;
+grant usage on schema public to anon, authenticated;
 grant select on public.call_import_rows to authenticated;
+grant insert, update on public.call_import_rows to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
 
 create or replace function public.nexus_latest_call_time(p_organization_id text default 'salc')
 returns timestamptz
@@ -20,7 +63,7 @@ set search_path = public
 as $$
   select max(c.call_time)
   from public.call_import_rows c
-  where c.organization_id = coalesce(p_organization_id, 'salc');
+  where c.organization_id = coalesce(nullif(p_organization_id, ''), 'salc');
 $$;
 
 create or replace function public.nexus_read_call_rows(
@@ -42,7 +85,7 @@ begin
     return query
     select c.raw, c.call_time
     from public.call_import_rows c
-    where c.organization_id = coalesce(p_organization_id, 'salc')
+    where c.organization_id = coalesce(nullif(p_organization_id, ''), 'salc')
       and (p_start is null or c.call_time >= p_start)
       and (p_end is null or c.call_time <= p_end)
     order by c.call_time desc nulls last
@@ -52,7 +95,7 @@ begin
     return query
     select c.raw, c.call_time
     from public.call_import_rows c
-    where c.organization_id = coalesce(p_organization_id, 'salc')
+    where c.organization_id = coalesce(nullif(p_organization_id, ''), 'salc')
       and (p_start is null or c.call_time >= p_start)
       and (p_end is null or c.call_time <= p_end)
     order by c.call_time asc nulls last
@@ -67,7 +110,11 @@ grant execute on function public.nexus_read_call_rows(text, timestamptz, timesta
 
 notify pgrst, 'reload schema';
 
-select organization_id, count(*) as lignes_partagees
+select
+  organization_id,
+  count(*) as lignes_partagees,
+  min(call_time) as premier_appel,
+  max(call_time) as dernier_appel
 from public.call_import_rows
 group by organization_id
 order by organization_id;
