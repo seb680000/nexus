@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { PhoneCall, Shield } from 'lucide-react';
 import './styles.css';
 
-import type { AbandonedReportRow, CallPath, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
+import type { AbandonedReportRow, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
 import { AbandonedView } from './components/AbandonedView';
 import { DashboardView } from './components/DashboardView';
 import { DataTable } from './components/DataTable';
@@ -13,7 +13,7 @@ import { Header } from './components/Header';
 import { MonthlyView } from './components/MonthlyView';
 import { Panel } from './components/Panel';
 import { SettingsView } from './components/SettingsView';
-import { addDays, dayKey, frDateHour, frTime, parseDate, periodLabel, startOfWeek } from './utils/dates';
+import { addDays, dayKey, frDateHour, frTime, parseDate, startOfWeek } from './utils/dates';
 import { formatClock, formatDuration } from './utils/format';
 import { parseCsv } from './utils/csv';
 import {
@@ -38,6 +38,18 @@ const views: { key: ViewKey; label: string }[] = [
   { key: 'abandoned', label: 'Abandonnes' },
   { key: 'settings', label: 'Parametres' },
 ];
+
+function pad(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function frShortDate(date: Date) {
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${String(date.getFullYear()).slice(2)}`;
+}
+
+function monthLabel(date: Date) {
+  return date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }).replace('.', '');
+}
 
 function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, customStart: string, customEnd: string) {
   if (!date || !anchor) return false;
@@ -67,6 +79,86 @@ function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, 
   }
 
   return date.getFullYear() === anchor.getFullYear();
+}
+
+function makeEmptyBucket(label: string) {
+  return { month: label, total: 0, traites: 0, abandonnes: 0 };
+}
+
+function incrementBucket(bucket: { total: number; traites: number; abandonnes: number }, calls: typeof import('./types').CallPath[]) {
+  bucket.total = calls.length;
+  bucket.traites = calls.filter((call) => call.treated).length;
+  bucket.abandonnes = calls.filter((call) => call.abandoned).length;
+}
+
+function buildChartData(calls: typeof import('./types').CallPath[], mode: PeriodMode, anchor: Date | null) {
+  if (!anchor) return [];
+
+  if (mode === 'day' || mode === 'custom') {
+    const datedCalls = calls.filter((call) => call.date).sort((a, b) => a.date!.getTime() - b.date!.getTime());
+    if (!datedCalls.length) return [];
+
+    const firstHour = datedCalls[0].date!.getHours();
+    const lastHour = datedCalls[datedCalls.length - 1].date!.getHours();
+    const byHour = groupBy(datedCalls, (call) => `${pad(call.date!.getHours())}h`);
+
+    return Array.from({ length: lastHour - firstHour + 1 }, (_, index) => {
+      const label = `${pad(firstHour + index)}h`;
+      const bucket = makeEmptyBucket(label);
+      incrementBucket(bucket, byHour.get(label) || []);
+      return bucket;
+    });
+  }
+
+  if (mode === 'week') {
+    const start = startOfWeek(anchor);
+    const byDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = addDays(start, index);
+      const label = frShortDate(date);
+      const bucket = makeEmptyBucket(label);
+      incrementBucket(bucket, byDay.get(label) || []);
+      return bucket;
+    });
+  }
+
+  if (mode === 'month') {
+    const firstDay = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+    const byDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+
+    return Array.from({ length: daysInMonth }, (_, index) => {
+      const date = new Date(firstDay);
+      date.setDate(index + 1);
+      const label = frShortDate(date);
+      const bucket = makeEmptyBucket(label);
+      incrementBucket(bucket, byDay.get(label) || []);
+      return bucket;
+    });
+  }
+
+  if (mode === 'quarter') {
+    const quarterStartMonth = Math.floor(anchor.getMonth() / 3) * 3;
+    const byMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+
+    return Array.from({ length: 3 }, (_, index) => {
+      const date = new Date(anchor.getFullYear(), quarterStartMonth + index, 1);
+      const label = monthLabel(date);
+      const bucket = makeEmptyBucket(label);
+      incrementBucket(bucket, byMonth.get(label) || []);
+      return bucket;
+    });
+  }
+
+  const byMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(anchor.getFullYear(), index, 1);
+    const label = monthLabel(date);
+    const bucket = makeEmptyBucket(label);
+    incrementBucket(bucket, byMonth.get(label) || []);
+    return bucket;
+  });
 }
 
 function App() {
@@ -166,19 +258,7 @@ function App() {
   );
 
   const stats = useMemo(() => summarize(filteredCalls, filteredRows, callbackSettings), [filteredCalls, filteredRows, callbackSettings]);
-
-  const chartData = useMemo(
-    () =>
-      [...groupBy(filteredCalls, (call) => (periodMode === 'day' || periodMode === 'custom' ? call.day : call.month)).entries()]
-        .sort()
-        .map(([label, list]) => ({
-          month: periodLabel(label),
-          total: list.length,
-          traites: list.filter((call) => call.treated).length,
-          abandonnes: list.filter((call) => call.abandoned).length,
-        })),
-    [filteredCalls, periodMode]
-  );
+  const chartData = useMemo(() => buildChartData(filteredCalls, periodMode, anchor), [filteredCalls, periodMode, anchor]);
 
   const byClient = useMemo(
     () =>
