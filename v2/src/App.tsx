@@ -6,8 +6,9 @@ import './styles.css';
 
 type ViewKey = 'dashboard' | 'monthly' | 'clients' | 'operators' | 'abandoned' | 'settings';
 type PeriodMode = 'custom' | 'day' | 'week' | 'month' | 'quarter' | 'year';
+type Service = 'premium' | 'forfait' | 'autre';
 type Row = { id: string; callId: string; time: Date | null; day: string; month: string; from: string; to: string; direction: string; status: string; ringing: number; talking: number; client: string; phone: string; operator: string; activity: string };
-type CallPath = { callId: string; day: string; month: string; date: Date | null; client: string; phone: string; service: 'premium' | 'forfait' | 'autre'; operator: string; treated: boolean; abandoned: boolean; wait: number; talk: number; rows: Row[] };
+type CallPath = { callId: string; day: string; month: string; date: Date | null; client: string; phone: string; service: Service; operator: string; treated: boolean; abandoned: boolean; wait: number; talk: number; rows: Row[] };
 type DetailItem = { id: string; date: string; client: string; operator: string; phone: string; step: string; status: string; wait: number; talk: number };
 type UserRow = { id: number; email: string; name: string; role: string; status: string; dashboard: boolean; monthly: boolean; clients: boolean; operators: boolean; abandoned: boolean; settings: boolean };
 
@@ -34,35 +35,26 @@ function fmt(total: number) {
   const h = Math.floor(n / 3600);
   const m = Math.floor((n % 3600) / 60);
   const s = n % 60;
+  if (h === 0) return `${m} min ${String(s).padStart(2, '0')} s`;
+  return `${h} h ${String(m).padStart(2, '0')} min`;
+}
+function fmtClock(total: number) {
+  const n = Math.max(0, Math.round(total || 0));
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
   return [h, m, s].map((x) => String(x).padStart(2, '0')).join(':');
 }
-function parseDate(value: string) {
-  if (!value || value === 'Totals') return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+function parseDate(value: string) { if (!value || value === 'Totals') return null; const d = new Date(value); return Number.isNaN(d.getTime()) ? null : d; }
 function frDate(date: Date | null) { return date ? date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-'; }
 function frDateTime(date: Date | null) { return date ? `${frDate(date)} ${date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '-'; }
-function dayKey(date: Date | null) {
-  if (!date) return 'inconnu';
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
+function dayKey(date: Date | null) { if (!date) return 'inconnu'; return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function periodLabel(label: string) {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(label)) {
-    const [y, m, d] = label.split('-');
-    return `${d}/${m}/${y.slice(2)}`;
-  }
-  if (/^\d{4}-\d{2}$/.test(label)) {
-    const [y, m] = label.split('-');
-    return `${m}/${y.slice(2)}`;
-  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(label)) { const [y, m, d] = label.split('-'); return `${d}/${m}/${y.slice(2)}`; }
+  if (/^\d{4}-\d{2}$/.test(label)) { const [y, m] = label.split('-'); return `${m}/${y.slice(2)}`; }
   return label;
 }
-function inHours(date: Date | null) {
-  if (!date) return false;
-  const h = date.getHours() + date.getMinutes() / 60;
-  return h >= 8 && h < 18;
-}
+function inHours(date: Date | null) { if (!date) return false; const h = date.getHours() + date.getMinutes() / 60; return h >= 8 && h < 18; }
 function csvLine(line: string, separator: string) {
   const out: string[] = [];
   let cur = '';
@@ -87,12 +79,7 @@ function parseCsv(text: string) {
 }
 function phoneFrom(value: string) { return norm(value).match(/0\d{6,}/)?.[0] || ''; }
 function looksLikePhone(value: string) { return /^\+?\d[\d\s.\-]{6,}$/.test(norm(value)); }
-function isClientName(value: string) {
-  const x = norm(value);
-  if (!x || x === 'Client non identifie') return false;
-  if (looksLikePhone(x)) return false;
-  return /[A-Za-zÀ-ÿ]/.test(x);
-}
+function isClientName(value: string) { const x = norm(value); return Boolean(x && x !== 'Client non identifie' && !looksLikePhone(x) && /[A-Za-zÀ-ÿ]/.test(x)); }
 function cleanName(raw: string) {
   const s = norm(raw).replace(/\(\d+\)/g, '').trim();
   const l = s.toLowerCase();
@@ -102,10 +89,7 @@ function cleanName(raw: string) {
 function opName(value: string) { return /\(\d+\)/.test(value) ? cleanName(value) : ''; }
 function opFromActivity(text: string) {
   const matches = [...text.matchAll(/(?:taken by|replaced by|transferred to)\s+([^>\n]+?\s*\(\d+\))/gi)];
-  for (const match of matches.reverse()) {
-    const name = cleanName(match[1]);
-    if (name) return name;
-  }
+  for (const match of matches.reverse()) { const name = cleanName(match[1]); if (name) return name; }
   return '';
 }
 function clientFrom(row: Record<string, string>) {
@@ -116,33 +100,12 @@ function clientFrom(row: Record<string, string>) {
   const from = norm(row.From);
   return isClientName(from) ? from : 'Client non identifie';
 }
-function serviceText(text: string): 'premium' | 'forfait' | 'autre' {
-  const l = text.toLowerCase();
-  if (l.includes('client premium')) return 'premium';
-  if (l.includes('client forfait')) return 'forfait';
-  return 'autre';
-}
+function serviceText(text: string): Service { const l = text.toLowerCase(); if (l.includes('client premium')) return 'premium'; if (l.includes('client forfait')) return 'forfait'; return 'autre'; }
 function mapRows(raw: Record<string, string>[]): Row[] {
   return raw.map((r, i) => {
     const time = parseDate(r['Call Time']);
     const activity = norm(r['Call Activity Details']);
-    return {
-      id: `${i}-${r['Call ID'] || ''}`,
-      callId: norm(r['Call ID']) || String(i),
-      time,
-      day: dayKey(time),
-      month: dayKey(time).slice(0, 7),
-      from: norm(r.From),
-      to: norm(r.To),
-      direction: norm(r.Direction),
-      status: norm(r.Status),
-      ringing: sec(r.Ringing),
-      talking: sec(r.Talking),
-      client: clientFrom(r),
-      phone: phoneFrom(r.From) || phoneFrom(activity),
-      operator: opName(r.To) || opName(r.From) || opFromActivity(activity),
-      activity,
-    };
+    return { id: `${i}-${r['Call ID'] || ''}`, callId: norm(r['Call ID']) || String(i), time, day: dayKey(time), month: dayKey(time).slice(0, 7), from: norm(r.From), to: norm(r.To), direction: norm(r.Direction), status: norm(r.Status), ringing: sec(r.Ringing), talking: sec(r.Talking), client: clientFrom(r), phone: phoneFrom(r.From) || phoneFrom(activity), operator: opName(r.To) || opName(r.From) || opFromActivity(activity), activity };
   }).filter((r) => r.time);
 }
 function isQueue(r: Row) { return r.direction.toLowerCase() === 'inbound queue'; }
@@ -151,28 +114,12 @@ function isUnanswered(r: Row) { return r.status.toLowerCase() === 'unanswered'; 
 function isAnswered(r: Row) { return r.status.toLowerCase() === 'answered'; }
 function isOutbound(r: Row) { return r.direction.toLowerCase() === 'outbound'; }
 function isInternal(r: Row) { return r.direction.toLowerCase() === 'internal'; }
-function groupBy<T>(items: T[], fn: (item: T) => string) {
-  const map = new Map<string, T[]>();
-  for (const item of items) map.set(fn(item), [...(map.get(fn(item)) || []), item]);
-  return map;
-}
-function startOfWeek(d: Date) {
-  const x = new Date(d);
-  const day = (x.getDay() + 6) % 7;
-  x.setHours(0, 0, 0, 0);
-  x.setDate(x.getDate() - day);
-  return x;
-}
+function groupBy<T>(items: T[], fn: (item: T) => string) { const map = new Map<string, T[]>(); for (const item of items) map.set(fn(item), [...(map.get(fn(item)) || []), item]); return map; }
+function startOfWeek(d: Date) { const x = new Date(d); const day = (x.getDay() + 6) % 7; x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - day); return x; }
 function addDays(d: Date, days: number) { const x = new Date(d); x.setDate(x.getDate() + days); return x; }
 function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, customStart: string, customEnd: string) {
   if (!date || !anchor) return false;
-  if (mode === 'custom') {
-    const s = customStart ? new Date(customStart) : new Date(anchor);
-    const e = customEnd ? new Date(customEnd) : new Date(anchor);
-    s.setHours(0, 1, 0, 0);
-    e.setHours(23, 0, 0, 0);
-    return date >= s && date <= e;
-  }
+  if (mode === 'custom') { const s = customStart ? new Date(customStart) : new Date(anchor); const e = customEnd ? new Date(customEnd) : new Date(anchor); s.setHours(0, 1, 0, 0); e.setHours(23, 0, 0, 0); return date >= s && date <= e; }
   if (mode === 'day') return dayKey(date) === dayKey(anchor);
   if (mode === 'week') { const s = startOfWeek(anchor); const e = addDays(s, 7); return date >= s && date < e; }
   if (mode === 'month') return date.getFullYear() === anchor.getFullYear() && date.getMonth() === anchor.getMonth();
@@ -190,21 +137,7 @@ function buildCalls(rows: Row[]) {
     const treated = queueRows.some(isWaiting);
     const abandoned = !treated && queueRows.some(isUnanswered);
     const text = sorted.map((r) => `${r.to} ${r.from} ${r.activity}`).join(' ');
-    calls.push({
-      callId,
-      day: queueRows[0].day,
-      month: queueRows[0].month,
-      date: queueRows[0].time,
-      client: queueRows.find((r) => isClientName(r.client))?.client || sorted.find((r) => isClientName(r.client))?.client || 'Client non identifie',
-      phone: sorted.map((r) => r.phone).find(Boolean) || '',
-      service: serviceText(text),
-      operator,
-      treated,
-      abandoned,
-      wait: queueRows.reduce((s, r) => s + Math.max(r.ringing, r.talking), 0),
-      talk: answeredRows.reduce((s, r) => s + r.talking, 0),
-      rows: sorted,
-    });
+    calls.push({ callId, day: queueRows[0].day, month: queueRows[0].month, date: queueRows[0].time, client: queueRows.find((r) => isClientName(r.client))?.client || sorted.find((r) => isClientName(r.client))?.client || 'Client non identifie', phone: sorted.map((r) => r.phone).find(Boolean) || '', service: serviceText(text), operator, treated, abandoned, wait: queueRows.reduce((s, r) => s + Math.max(r.ringing, r.talking), 0), talk: answeredRows.reduce((s, r) => s + r.talking, 0), rows: sorted });
   }
   return calls;
 }
@@ -217,8 +150,15 @@ function callDetails(calls: CallPath[]): DetailItem[] {
     return items;
   });
 }
-function outboundDetails(rows: Row[]): DetailItem[] {
-  return rows.filter((r) => isOutbound(r) && isAnswered(r) && r.talking >= 10).map((r) => ({ id: r.id, date: frDateTime(r.time), client: r.client, operator: r.operator || 'Non identifie', phone: r.phone, step: 'Appel sortant', status: r.status, wait: 0, talk: r.talking }));
+function outboundDetails(rows: Row[]): DetailItem[] { return rows.filter((r) => isOutbound(r) && isAnswered(r) && r.talking >= 10).map((r) => ({ id: r.id, date: frDateTime(r.time), client: r.client, operator: r.operator || 'Non identifie', phone: r.phone, step: 'Appel sortant', status: r.status, wait: 0, talk: r.talking })); }
+function computeCallbacks(abandoned: CallPath[], outboundRows: Row[]) {
+  const calledBack = new Set<string>();
+  for (const a of abandoned) {
+    if (!a.phone || !a.date) continue;
+    const found = outboundRows.find((r) => r.phone === a.phone && r.time && r.time > a.date);
+    if (found) calledBack.add(a.callId);
+  }
+  return calledBack;
 }
 function summarize(calls: CallPath[], raw: Row[]) {
   const treated = calls.filter((q) => q.treated);
@@ -226,8 +166,20 @@ function summarize(calls: CallPath[], raw: Row[]) {
   const total = treated.length + abandoned.length;
   const business = raw.filter((r) => inHours(r.time));
   const outboundRows = business.filter((r) => isOutbound(r) && isAnswered(r) && r.talking >= 10);
-  return { calls, treated, abandoned, total, waitingNow: 0, maxWait: calls.reduce((m, q) => Math.max(m, q.wait), 0), premiumAbandoned: abandoned.filter((q) => q.service === 'premium').length, internal: business.filter((r) => isInternal(r) && isAnswered(r)).length, outbound: outboundRows.length, outboundRows, answerRate: total ? Math.round((treated.length / total) * 1000) / 10 : 0, abandonRate: total ? Math.round((abandoned.length / total) * 1000) / 10 : 0 };
+  const calledBackIds = computeCallbacks(abandoned, outboundRows);
+  const abandonedOver5 = abandoned.filter((q) => q.wait > 5);
+  const premiumOver5 = abandonedOver5.filter((q) => q.service === 'premium').length;
+  const forfaitOver5 = abandonedOver5.filter((q) => q.service === 'forfait').length;
+  const callbackRows = outboundRows.filter((r) => abandoned.some((a) => a.phone && a.phone === r.phone && a.date && r.time && r.time > a.date));
+  const invoiceTotal = treated.length + callbackRows.length + outboundRows.length;
+  const avgAbandonedWait = abandoned.length ? abandoned.reduce((s, q) => s + q.wait, 0) / abandoned.length : 0;
+  const avgTalk = treated.length ? treated.reduce((s, q) => s + q.talk, 0) / treated.length : 0;
+  return { calls, treated, abandoned, total, maxWait: abandoned.reduce((m, q) => Math.max(m, q.wait), 0), avgAbandonedWait, avgTalk, abandonedOver5: abandonedOver5.length, premiumOver5, forfaitOver5, premiumAbandoned: abandoned.filter((q) => q.service === 'premium').length, internal: business.filter((r) => isInternal(r) && isAnswered(r)).length, outbound: outboundRows.length, outboundRows, callbacksDone: calledBackIds.size, callbacksRemaining: Math.max(0, abandoned.length - calledBackIds.size), invoiceTotal, answerRate: total ? Math.round((treated.length / total) * 100) : 0, abandonRate: total ? Math.round((abandoned.length / total) * 100) : 0 };
 }
+function dateRangeLabel(rows: Row[]) { const dates = rows.map((r) => r.time).filter(Boolean).sort((a, b) => a!.getTime() - b!.getTime()); if (!dates.length) return '-'; return `${frDate(dates[0])} au ${frDate(dates[dates.length - 1])}`; }
+function uniqueDays(rows: Row[]) { return new Set(rows.map((r) => r.day).filter((x) => x !== 'inconnu')).size; }
+
+type DashboardStats = ReturnType<typeof summarize>;
 
 function App() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -252,47 +204,25 @@ function App() {
   const filteredCalls = useMemo(() => periodCalls.filter((q) => (client === 'all' || q.client === client) && (selectedOperators.includes('all') || selectedOperators.includes(q.operator))), [periodCalls, client, selectedOperators]);
   const filteredRows = useMemo(() => filteredCalls.flatMap((c) => c.rows), [filteredCalls]);
   const stats = useMemo(() => summarize(filteredCalls, filteredRows), [filteredCalls, filteredRows]);
-  const chartData = useMemo(() => [...groupBy(filteredCalls, (q) => (periodMode === 'day' || periodMode === 'custom' ? q.day : q.month)).entries()].sort().map(([label, list]) => ({ month: periodLabel(label), appels: list.length, traites: list.filter((q) => q.treated).length, abandonnes: list.filter((q) => q.abandoned).length })), [filteredCalls, periodMode]);
-  const byClient = useMemo(() => [...groupBy(filteredCalls.filter((q) => isClientName(q.client)), (q) => q.client).entries()].map(([label, list]) => ({ label, total: list.length, treated: list.filter((q) => q.treated).length, abandoned: list.filter((q) => q.abandoned).length, wait: fmt(list.reduce((s, q) => s + q.wait, 0)), talk: fmt(list.reduce((s, q) => s + q.talk, 0)), details: callDetails(list) })).sort((a, b) => b.total - a.total), [filteredCalls]);
-  const byOperator = useMemo(() => [...groupBy(filteredCalls.filter((q) => q.treated), (q) => q.operator).entries()].map(([label, list]) => ({ label, total: list.length, wait: fmt(list.reduce((s, q) => s + q.wait, 0)), talk: fmt(list.reduce((s, q) => s + q.talk, 0)), avg: list.length ? fmt(list.reduce((s, q) => s + q.talk, 0) / list.length) : '00:00:00', details: callDetails(list) })).sort((a, b) => b.total - a.total), [filteredCalls]);
+  const chartData = useMemo(() => [...groupBy(filteredCalls, (q) => (periodMode === 'day' || periodMode === 'custom' ? q.day : q.month)).entries()].sort().map(([label, list]) => ({ month: periodLabel(label), total: list.length, traites: list.filter((q) => q.treated).length, abandonnes: list.filter((q) => q.abandoned).length })), [filteredCalls, periodMode]);
+  const byClient = useMemo(() => [...groupBy(filteredCalls.filter((q) => isClientName(q.client)), (q) => q.client).entries()].map(([label, list]) => ({ label, total: list.length, treated: list.filter((q) => q.treated).length, abandoned: list.filter((q) => q.abandoned).length, wait: fmtClock(list.reduce((s, q) => s + q.wait, 0)), talk: fmtClock(list.reduce((s, q) => s + q.talk, 0)), details: callDetails(list) })).sort((a, b) => b.total - a.total), [filteredCalls]);
+  const byOperator = useMemo(() => [...groupBy(filteredCalls.filter((q) => q.treated), (q) => q.operator).entries()].map(([label, list]) => ({ label, total: list.length, wait: fmtClock(list.reduce((s, q) => s + q.wait, 0)), talk: fmtClock(list.reduce((s, q) => s + q.talk, 0)), avg: list.length ? fmtClock(list.reduce((s, q) => s + q.talk, 0) / list.length) : '00:00:00', details: callDetails(list) })).sort((a, b) => b.total - a.total), [filteredCalls]);
 
   async function handleFile(file: File) { setRows(mapRows(parseCsv(await file.text()))); setPeriodMode('custom'); setCustomStart(''); setCustomEnd(''); }
-  function toggleOperator(op: string) {
-    if (op === 'all') { setSelectedOperators(['all']); return; }
-    const base = selectedOperators.filter((x) => x !== 'all');
-    const next = base.includes(op) ? base.filter((x) => x !== op) : [...base, op];
-    setSelectedOperators(next.length ? next : ['all']);
-  }
-  function addUser() {
-    if (!newEmail.trim()) return;
-    setUsers([...users, { id: Date.now(), email: newEmail.trim(), name: 'Nouvel utilisateur', role: 'user', status: 'active', dashboard: true, monthly: false, clients: false, operators: false, abandoned: false, settings: false }]);
-    setNewEmail('');
-  }
+  function toggleOperator(op: string) { if (op === 'all') { setSelectedOperators(['all']); return; } const base = selectedOperators.filter((x) => x !== 'all'); const next = base.includes(op) ? base.filter((x) => x !== op) : [...base, op]; setSelectedOperators(next.length ? next : ['all']); }
+  function addUser() { if (!newEmail.trim()) return; setUsers([...users, { id: Date.now(), email: newEmail.trim(), name: 'Nouvel utilisateur', role: 'user', status: 'active', dashboard: true, monthly: false, clients: false, operators: false, abandoned: false, settings: false }]); setNewEmail(''); }
 
   return (
     <main className="appShell">
-      <aside className="sidebar">
-        <div className="brand">Nexus <span>V2</span></div>
-        <div className="userBox"><Shield size={18} />{loggedUser.email}<small>{loggedUser.role}</small></div>
-        <nav>{views.map((v) => <button key={v.key} className={activeView === v.key ? 'activeNav' : ''} onClick={() => setActiveView(v.key)}>{v.label}</button>)}</nav>
-      </aside>
+      <aside className="sidebar"><div className="brand">Nexus <span>V2</span></div><div className="userBox"><Shield size={18} />{loggedUser.email}<small>{loggedUser.role}</small></div><nav>{views.map((v) => <button key={v.key} className={activeView === v.key ? 'activeNav' : ''} onClick={() => setActiveView(v.key)}>{v.label}</button>)}</nav></aside>
       <section className="content">
-        <header className="topbar">
-          <div><h1>{views.find((v) => v.key === activeView)?.label}</h1><p>Periode active : {periodMode}. Date de reference : {frDate(anchor)}.</p></div>
-          <label className="uploadButton"><Upload size={18} /> Importer export 3CX<input type="file" accept=".csv,text/csv" onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} /></label>
-        </header>
-        <section className="filters">
-          <label>Periode<select value={periodMode} onChange={(e) => setPeriodMode(e.target.value as PeriodMode)}><option value="custom">Personnalise</option><option value="day">Jour</option><option value="week">Semaine</option><option value="month">Mois</option><option value="quarter">Trimestre</option><option value="year">Annee</option></select></label>
-          {periodMode === 'custom' && <><label>Debut<input type="date" value={effectiveStart} onChange={(e) => setCustomStart(e.target.value)} /></label><label>Fin<input type="date" value={effectiveEnd} onChange={(e) => setCustomEnd(e.target.value)} /></label></>}
-          <label>Client<select value={client} onChange={(e) => setClient(e.target.value)}><option value="all">Tous</option>{clients.map((c) => <option key={c}>{c}</option>)}</select></label>
-          <div className="operatorFilter"><span>Operatrice</span><div className="operatorBox"><label><input type="checkbox" checked={selectedOperators.includes('all')} onChange={() => toggleOperator('all')} /> Toutes</label>{operators.map((o) => <label key={o}><input type="checkbox" checked={!selectedOperators.includes('all') && selectedOperators.includes(o)} onChange={() => toggleOperator(o)} /> {o}</label>)}</div></div>
-          <div className="periodHint"><CalendarDays size={16} /> Un clic coche ou decoche une operatrice.</div>
-        </section>
-        {activeView === 'dashboard' && <Dashboard stats={stats} calls={filteredCalls} chartData={chartData} setDetail={setDetail} />}
+        <header className="topbar"><div><h1>{views.find((v) => v.key === activeView)?.label}</h1><p>Periode active : {periodMode}. Date de reference : {frDate(anchor)}.</p></div><label className="uploadButton"><Upload size={18} /> Importer export 3CX<input type="file" accept=".csv,text/csv" onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} /></label></header>
+        <section className="filters"><label>Periode<select value={periodMode} onChange={(e) => setPeriodMode(e.target.value as PeriodMode)}><option value="custom">Personnalise</option><option value="day">Jour</option><option value="week">Semaine</option><option value="month">Mois</option><option value="quarter">Trimestre</option><option value="year">Annee</option></select></label>{periodMode === 'custom' && <><label>Debut<input type="date" value={effectiveStart} onChange={(e) => setCustomStart(e.target.value)} /></label><label>Fin<input type="date" value={effectiveEnd} onChange={(e) => setCustomEnd(e.target.value)} /></label></>}<label>Client<select value={client} onChange={(e) => setClient(e.target.value)}><option value="all">Tous</option>{clients.map((c) => <option key={c}>{c}</option>)}</select></label><div className="operatorFilter"><span>Operatrice</span><div className="operatorBox"><label><input type="checkbox" checked={selectedOperators.includes('all')} onChange={() => toggleOperator('all')} /> Toutes</label>{operators.map((o) => <label key={o}><input type="checkbox" checked={!selectedOperators.includes('all') && selectedOperators.includes(o)} onChange={() => toggleOperator(o)} /> {o}</label>)}</div></div><div className="periodHint"><CalendarDays size={16} /> Un clic coche ou decoche une operatrice.</div></section>
+        {activeView === 'dashboard' && <Dashboard stats={stats} rows={rows} calls={filteredCalls} chartData={chartData} setDetail={setDetail} />}
         {activeView === 'monthly' && <Monthly data={chartData} />}
         {activeView === 'clients' && <Panel title="Analyse clients"><Table rows={byClient} columns={[["label", "Client"], ["total", "Total"], ["treated", "Traites"], ["abandoned", "Abandonnes"], ["wait", "Attente"], ["talk", "Parole"]]} onOpen={(r) => setDetail(r.details)} /></Panel>}
         {activeView === 'operators' && <Panel title="Analyse operatrices"><Table rows={byOperator} columns={[["label", "Operatrice"], ["total", "Appels"], ["wait", "Attente"], ["talk", "Parole"], ["avg", "Moyenne"]]} onOpen={(r) => setDetail(r.details)} /></Panel>}
-        {activeView === 'abandoned' && <Panel title="Appels abandonnes"><Table rows={filteredCalls.filter((q) => q.abandoned).map((q) => ({ label: q.client, operator: q.operator, phone: q.phone, service: q.service, wait: fmt(q.wait), details: callDetails([q]) }))} columns={[["label", "Client"], ["operator", "Operatrice"], ["phone", "Telephone"], ["service", "Type"], ["wait", "Attente"]]} onOpen={(r) => setDetail(r.details)} /></Panel>}
+        {activeView === 'abandoned' && <Panel title="Appels abandonnes"><Table rows={filteredCalls.filter((q) => q.abandoned).map((q) => ({ label: q.client, operator: q.operator, phone: q.phone, service: q.service, wait: fmtClock(q.wait), details: callDetails([q]) }))} columns={[["label", "Client"], ["operator", "Operatrice"], ["phone", "Telephone"], ["service", "Type"], ["wait", "Attente"]]} onOpen={(r) => setDetail(r.details)} /></Panel>}
         {activeView === 'settings' && <Settings users={users} setUsers={setUsers} newEmail={newEmail} setNewEmail={setNewEmail} addUser={addUser} />}
         {!rows.length && <section className="emptyState"><PhoneCall size={32} /><h2>Importer un export 3CX pour demarrer</h2><p>La V2 analyse le fichier immediatement.</p></section>}
       </section>
@@ -301,18 +231,14 @@ function App() {
   );
 }
 
-function Dashboard({ stats, calls, chartData, setDetail }: { stats: ReturnType<typeof summarize>; calls: CallPath[]; chartData: any[]; setDetail: (rows: DetailItem[]) => void }) {
-  const daily = [...groupBy(calls, (q) => q.day).entries()].sort().map(([day, list]) => ({ day: periodLabel(day), appels: list.length, traites: list.filter((q) => q.treated).length, abandonnes: list.filter((q) => q.abandoned).length }));
-  return <><section className="cards"><Stat title="En attente d'appels" value={stats.waitingNow} onClick={() => setDetail([])} /><Stat title="Appels traites" value={stats.treated.length} suffix={`${stats.answerRate}%`} onClick={() => setDetail(callDetails(stats.treated))} /><Stat title="Appels abandonnes" value={stats.abandoned.length} suffix={`${stats.abandonRate}%`} tone="danger" onClick={() => setDetail(callDetails(stats.abandoned))} /><Stat title="Attente la plus longue" value={fmt(stats.maxWait)} onClick={() => setDetail(callDetails(stats.calls.filter((q) => q.wait === stats.maxWait)))} /><Stat title="Total file" value={stats.total} onClick={() => setDetail(callDetails(stats.calls))} /><Stat title="Premium abandonnes" value={stats.premiumAbandoned} tone="warning" onClick={() => setDetail(callDetails(stats.abandoned.filter((q) => q.service === 'premium')))} /><Stat title="Internes" value={stats.internal} onClick={() => setDetail([])} /><Stat title="Sortants" value={stats.outbound} onClick={() => setDetail(outboundDetails(stats.outboundRows))} /></section><section className="grid2"><Panel title="Courbe par periode"><ResponsiveContainer width="100%" height={280}><LineChart data={daily}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis /><Tooltip /><Line type="monotone" dataKey="appels" /><Line type="monotone" dataKey="traites" /><Line type="monotone" dataKey="abandonnes" /></LineChart></ResponsiveContainer></Panel><Panel title="Vue periode"><ResponsiveContainer width="100%" height={280}><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip /><Bar dataKey="appels" /><Bar dataKey="abandonnes" /></BarChart></ResponsiveContainer></Panel></section></>;
+function Dashboard({ stats, rows, calls, chartData, setDetail }: { stats: DashboardStats; rows: Row[]; calls: CallPath[]; chartData: any[]; setDetail: (rows: DetailItem[]) => void }) {
+  return <><section className="cards"><Stat title="Dates CSV" value={uniqueDays(rows)} subtitle={dateRangeLabel(rows)} /><Stat title="Appels traites" value={`${stats.treated.length} / ${stats.total}`} subtitle={`${stats.answerRate}% des entrants`} onClick={() => setDetail(callDetails(stats.treated))} /><Stat title="Abandonnes" value={stats.abandoned.length} subtitle={`Dont ${stats.abandonedOver5} appel(s) de plus de 5 secondes · Premium ${stats.premiumOver5} · Forfait ${stats.forfaitOver5}`} tone="danger" onClick={() => setDetail(callDetails(stats.abandoned))} /><Stat title="Total entrants" value={stats.total} subtitle="traites + abandonnes" onClick={() => setDetail(callDetails(stats.calls))} /><Stat title="Total a facturer" value={stats.invoiceTotal} subtitle="clients + rappels + sortants" /><Stat title="Sortants clients" value={stats.outbound} subtitle="repondus >= 10 sec" onClick={() => setDetail(outboundDetails(stats.outboundRows))} /><Stat title="Rappels realises" value={stats.callbacksDone} subtitle={`${stats.callbacksDone} client(s) ont rappele`} /><Stat title="Rappels restants" value={stats.callbacksRemaining} subtitle={`Premium + forfait hors <5 sec`} /><Stat title="Inter-collab." value={stats.internal} subtitle="appels internes" /><Stat title="Attente max" value={fmt(stats.maxWait)} subtitle="abandonnes" /><Stat title="Attente moy." value={fmt(stats.avgAbandonedWait)} subtitle="abandonnes" /><Stat title="Parole moy." value={fmt(stats.avgTalk)} subtitle={`${stats.treated.length} conversations`} /></section><Panel title="Courbe par periode"><ResponsiveContainer width="100%" height={320}><LineChart data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip /><Line type="linear" dataKey="total" name="Total entrants" dot={false} /><Line type="linear" dataKey="traites" name="Traites" dot={false} /><Line type="linear" dataKey="abandonnes" name="Abandonnes" dot={false} /></LineChart></ResponsiveContainer></Panel></>;
 }
-function Monthly({ data }: { data: any[] }) { return <Panel title="Stats mensuelles"><ResponsiveContainer width="100%" height={360}><BarChart data={data}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip /><Bar dataKey="appels" /><Bar dataKey="traites" /><Bar dataKey="abandonnes" /></BarChart></ResponsiveContainer></Panel>; }
-function Settings({ users, setUsers, newEmail, setNewEmail, addUser }: { users: UserRow[]; setUsers: (u: UserRow[]) => void; newEmail: string; setNewEmail: (v: string) => void; addUser: () => void }) {
-  function update(id: number, key: keyof UserRow, value: any) { setUsers(users.map((u) => u.id === id ? { ...u, [key]: value } : u)); }
-  return <Panel title="Parametres utilisateurs"><div className="settingsActions"><input placeholder="email utilisateur" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} /><button onClick={addUser}>Creer utilisateur</button></div><Table rows={users.map((u) => ({ ...u, actions: 'Supprimer' }))} columns={[["email", "Email"], ["name", "Nom"], ["role", "Role"], ["status", "Statut"]]} onOpen={(r) => setUsers(users.filter((u) => u.id !== r.id))} /><div className="tableWrap"><table><thead><tr><th>Utilisateur</th>{views.map((v) => <th key={v.key}>{v.label}</th>)}</tr></thead><tbody>{users.map((u) => <tr key={u.id}><td>{u.email}</td>{views.map((v) => <td key={v.key}><input type="checkbox" checked={Boolean((u as any)[v.key])} onChange={(e) => update(u.id, v.key as keyof UserRow, e.target.checked)} /></td>)}</tr>)}</tbody></table></div></Panel>;
-}
-function Stat({ title, value, suffix, tone, onClick }: { title: string; value: number | string; suffix?: string; tone?: 'danger' | 'warning'; onClick: () => void }) { return <button className={`statCard ${tone || ''}`} onClick={onClick}><span>{title}</span><b>{typeof value === 'number' ? value.toLocaleString('fr-FR') : value}</b>{suffix && <small>{suffix}</small>}</button>; }
+function Monthly({ data }: { data: any[] }) { return <Panel title="Stats mensuelles"><ResponsiveContainer width="100%" height={360}><BarChart data={data}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip /><Bar dataKey="total" name="Total entrants" /><Bar dataKey="traites" name="Traites" /><Bar dataKey="abandonnes" name="Abandonnes" /></BarChart></ResponsiveContainer></Panel>; }
+function Settings({ users, setUsers, newEmail, setNewEmail, addUser }: { users: UserRow[]; setUsers: (u: UserRow[]) => void; newEmail: string; setNewEmail: (v: string) => void; addUser: () => void }) { function update(id: number, key: keyof UserRow, value: any) { setUsers(users.map((u) => u.id === id ? { ...u, [key]: value } : u)); } return <Panel title="Parametres utilisateurs"><div className="settingsActions"><input placeholder="email utilisateur" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} /><button onClick={addUser}>Creer utilisateur</button></div><Table rows={users.map((u) => ({ ...u, actions: 'Supprimer' }))} columns={[["email", "Email"], ["name", "Nom"], ["role", "Role"], ["status", "Statut"]]} onOpen={(r) => setUsers(users.filter((u) => u.id !== r.id))} /><div className="tableWrap"><table><thead><tr><th>Utilisateur</th>{views.map((v) => <th key={v.key}>{v.label}</th>)}</tr></thead><tbody>{users.map((u) => <tr key={u.id}><td>{u.email}</td>{views.map((v) => <td key={v.key}><input type="checkbox" checked={Boolean((u as any)[v.key])} onChange={(e) => update(u.id, v.key as keyof UserRow, e.target.checked)} /></td>)}</tr>)}</tbody></table></div></Panel>; }
+function Stat({ title, value, subtitle, tone, onClick }: { title: string; value: number | string; subtitle?: string; tone?: 'danger' | 'warning'; onClick?: () => void }) { return <button className={`statCard ${tone || ''}`} onClick={onClick || (() => {})}><span>{title}</span><b>{typeof value === 'number' ? value.toLocaleString('fr-FR') : value}</b>{subtitle && <small>{subtitle}</small>}</button>; }
 function Panel({ title, children }: { title: string; children: React.ReactNode }) { return <section className="panel"><h2>{title}</h2>{children}</section>; }
 function Table({ rows, columns, onOpen }: { rows: any[]; columns: [string, string][]; onOpen: (row: any) => void }) { return <div className="tableWrap"><table><thead><tr>{columns.map(([, l]) => <th key={l}>{l}</th>)}<th>Detail</th></tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{columns.map(([k]) => <td key={k}>{r[k]}</td>)}<td><button className="small" onClick={() => onOpen(r)}>{r.actions || 'Ouvrir'}</button></td></tr>)}</tbody></table></div>; }
-function Detail({ rows, onClose }: { rows: DetailItem[]; onClose: () => void }) { return <div className="modalBackdrop"><div className="modal"><header><h2>Detail du parcours appel</h2><button onClick={onClose}>Fermer</button></header><div className="tableWrap"><table><thead><tr><th>Date</th><th>Client</th><th>Operatrice</th><th>Telephone</th><th>Etape</th><th>Statut</th><th>Attente</th><th>Parole</th></tr></thead><tbody>{rows.slice(0, 500).map((r) => <tr key={r.id}><td>{r.date}</td><td>{r.client}</td><td>{r.operator}</td><td>{r.phone}</td><td>{r.step}</td><td>{r.status}</td><td>{fmt(r.wait)}</td><td>{fmt(r.talk)}</td></tr>)}</tbody></table></div></div></div>; }
+function Detail({ rows, onClose }: { rows: DetailItem[]; onClose: () => void }) { return <div className="modalBackdrop"><div className="modal"><header><h2>Detail du parcours appel</h2><button onClick={onClose}>Fermer</button></header><div className="tableWrap"><table><thead><tr><th>Date</th><th>Client</th><th>Operatrice</th><th>Telephone</th><th>Etape</th><th>Statut</th><th>Attente</th><th>Parole</th></tr></thead><tbody>{rows.slice(0, 500).map((r) => <tr key={r.id}><td>{r.date}</td><td>{r.client}</td><td>{r.operator}</td><td>{r.phone}</td><td>{r.step}</td><td>{r.status}</td><td>{fmtClock(r.wait)}</td><td>{fmtClock(r.talk)}</td></tr>)}</tbody></table></div></div></div>; }
 
 createRoot(document.getElementById('root')!).render(<App />);
