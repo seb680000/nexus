@@ -3,6 +3,7 @@ import type { CallPath, ChartMetric, DetailItem, Row, ViewKey } from '../types';
 import { callDetails, outboundDetails, totalDays, dateRangeLabel } from '../utils/calls';
 import { frDate } from '../utils/dates';
 import { formatDuration } from '../utils/format';
+import { nexMetricHelp } from '../utils/nexHelp';
 import { Panel } from './Panel';
 import { StatCard } from './StatCard';
 
@@ -40,6 +41,19 @@ export function formatChartValue(value: unknown, metric: ChartMetric) {
   }
 
   return `${minutes}m${String(seconds).padStart(2, '0')}`;
+}
+
+export function NexChartTooltip({ active, payload, label, metricLabel, metric }: any) {
+  if (!active || !payload?.length) return null;
+  const value = payload[0]?.value;
+
+  return (
+    <div className="nexTooltip">
+      <strong>NEX · {label}</strong>
+      <b>{metricLabel} : {formatChartValue(value, metric)}</b>
+      <p>{nexMetricHelp(metricLabel)}</p>
+    </div>
+  );
 }
 
 type DashboardStats = {
@@ -125,7 +139,7 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
 
       <Panel title="Courbe par periode">
         <section className="filters">
-          <label>
+          <label title={nexMetricHelp('Indicateur courbe')}>
             Indicateur courbe
             <select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)}>
               {chartMetricOptions.map((option) => (
@@ -140,8 +154,8 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" />
             <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
-            <Tooltip formatter={(value) => [formatChartValue(value, chartMetric), selectedMetric]} />
-            <Line type="linear" dataKey="value" name={selectedMetric} dot={false} />
+            <Tooltip content={<NexChartTooltip metricLabel={selectedMetric} metric={chartMetric} />} />
+            <Line type="linear" dataKey="value" name={selectedMetric} dot={{ r: 4 }} activeDot={{ r: 7 }} />
           </LineChart>
         </ResponsiveContainer>
       </Panel>
