@@ -2,6 +2,18 @@ export type ViewKey = 'dashboard' | 'monthly' | 'clients' | 'operators' | 'aband
 export type PeriodMode = 'custom' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 export type Service = 'premium' | 'forfait' | 'autre';
 export type DurationFilter = 'all' | 'gt5' | 'gt10' | 'gt30' | 'gt60';
+export type ChartMetric =
+  | 'invoiceTotal'
+  | 'treated'
+  | 'abandoned'
+  | 'total'
+  | 'outbound'
+  | 'callbacksDone'
+  | 'callbacksRemaining'
+  | 'internal'
+  | 'maxWait'
+  | 'avgAbandonedWait'
+  | 'avgTalk';
 
 export type Row = {
   id: string;
