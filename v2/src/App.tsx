@@ -23,6 +23,7 @@ import {
   groupBy,
   isClientName,
   isDurationMatch,
+  isOperatorProbe,
   mapRows,
   statusForAbandon,
   summarize,
@@ -49,6 +50,21 @@ function frShortDate(date: Date) {
 
 function monthLabel(date: Date) {
   return date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }).replace('.', '');
+}
+
+function callHasSelectedOperator(call: CallPath, selectedOperators: string[]) {
+  if (selectedOperators.includes('all')) return true;
+
+  return (
+    selectedOperators.includes(call.operator) ||
+    call.rows.some((row) => selectedOperators.includes(row.operator)) ||
+    call.rows.some((row) => isOperatorProbe(row) && selectedOperators.includes(row.operator))
+  );
+}
+
+function rowHasSelectedOperator(row: Row, selectedOperators: string[]) {
+  if (selectedOperators.includes('all')) return true;
+  return selectedOperators.includes(row.operator) || (isOperatorProbe(row) && selectedOperators.includes(row.operator));
 }
 
 function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, customStart: string, customEnd: string) {
@@ -250,10 +266,7 @@ function App() {
     () =>
       periodCalls.filter(
         (call) =>
-          (client === 'all' || call.client === client) &&
-          (selectedOperators.includes('all') ||
-            selectedOperators.includes(call.operator) ||
-            call.rows.some((row) => selectedOperators.includes(row.operator)))
+          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators)
       ),
     [periodCalls, client, selectedOperators]
   );
@@ -262,8 +275,7 @@ function App() {
     () =>
       periodRows.filter(
         (row) =>
-          (client === 'all' || row.client === client) &&
-          (selectedOperators.includes('all') || selectedOperators.includes(row.operator))
+          (client === 'all' || row.client === client) && rowHasSelectedOperator(row, selectedOperators)
       ),
     [periodRows, client, selectedOperators]
   );
