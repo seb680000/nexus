@@ -21,9 +21,13 @@ import {
   buildOperatorAnalysis,
   callDetails,
   groupBy,
+  isAnswered,
   isClientName,
   isDurationMatch,
+  isInbound,
+  isInternal,
   isOperatorProbe,
+  isOutbound,
   mapRows,
   statusForAbandon,
   summarize,
@@ -52,8 +56,59 @@ function monthLabel(date: Date) {
   return date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }).replace('.', '');
 }
 
-function callHasSelectedOperator(call: CallPath, selectedOperators: string[]) {
+function rangesOverlap(startA: number, endA: number, startB: number, endB: number) {
+  return startA < endB && startB < endA;
+}
+
+function rowEndTime(row: Row) {
+  const duration = Math.max(row.talking, row.ringing, 1);
+  return (row.time?.getTime() || 0) + duration * 1000;
+}
+
+function operatorWasInternalDuring(call: CallPath, operator: string, rows: Row[]) {
+  if (!call.date) return false;
+
+  const callStart = call.date.getTime();
+  const callEnd = callStart + Math.max(call.wait, 1) * 1000;
+
+  return rows.some((row) => {
+    if (!row.time || row.operator !== operator || !isInternal(row)) return false;
+    return rangesOverlap(callStart, callEnd, row.time.getTime(), rowEndTime(row));
+  });
+}
+
+function operatorWasBusyWithClientDuring(call: CallPath, operator: string, rows: Row[]) {
+  if (!call.date) return false;
+
+  const callStart = call.date.getTime();
+  const callEnd = callStart + Math.max(call.wait, 1) * 1000;
+
+  return rows.some((row) => {
+    if (!row.time || row.operator !== operator) return false;
+    if (isInternal(row)) return false;
+    if (!(isInbound(row) || isOutbound(row)) || !isAnswered(row) || row.talking <= 0) return false;
+
+    return rangesOverlap(callStart, callEnd, row.time.getTime(), rowEndTime(row));
+  });
+}
+
+function operatorCanBeLinkedToAbandon(call: CallPath, operator: string, rows: Row[]) {
+  if (!call.abandoned) return false;
+  if (operatorWasInternalDuring(call, operator, rows)) return true;
+  return !operatorWasBusyWithClientDuring(call, operator, rows);
+}
+
+function callHasSelectedOperator(call: CallPath, selectedOperators: string[], rows: Row[]) {
   if (selectedOperators.includes('all')) return true;
+
+  if (call.abandoned) {
+    return selectedOperators.some((operator) =>
+      selectedOperators.includes(call.operator) ||
+      call.rows.some((row) => selectedOperators.includes(row.operator)) ||
+      call.rows.some((row) => isOperatorProbe(row) && selectedOperators.includes(row.operator)) ||
+      operatorCanBeLinkedToAbandon(call, operator, rows)
+    );
+  }
 
   return (
     selectedOperators.includes(call.operator) ||
@@ -266,9 +321,9 @@ function App() {
     () =>
       periodCalls.filter(
         (call) =>
-          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators)
+          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators, periodRows)
       ),
-    [periodCalls, client, selectedOperators]
+    [periodCalls, periodRows, client, selectedOperators]
   );
 
   const filteredRows = useMemo(
