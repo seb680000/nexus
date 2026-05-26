@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { ChartMetric } from '../types';
-import { chartMetricOptions, formatChartValue } from './DashboardView';
+import { chartMetricOptions, formatChartValue, NexChartTooltip } from './DashboardView';
 import { Panel } from './Panel';
 
 type MonthlyViewProps = {
@@ -30,7 +30,7 @@ export function MonthlyView({ data, chartMetric, setChartMetric }: MonthlyViewPr
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="month" />
           <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
-          <Tooltip formatter={(value) => [formatChartValue(value, chartMetric), selectedMetric]} />
+          <Tooltip content={<NexChartTooltip metricLabel={selectedMetric} metric={chartMetric} />} />
           <Bar dataKey="value" name={selectedMetric} />
         </BarChart>
       </ResponsiveContainer>
