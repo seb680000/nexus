@@ -1,321 +1,200 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { Upload, Shield, Users, PhoneCall, CalendarDays } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CalendarDays, PhoneCall, Shield, Upload } from 'lucide-react';
 import './styles.css';
 
-type Role = 'superadmin' | 'admin' | 'manager' | 'user';
-
-type CallRow = {
+type Row = {
   id: string;
-  callTime: Date | null;
-  dayKey: string;
-  monthKey: string;
-  hour: number | null;
-  minute: number | null;
-  client: string;
-  operatorName: string;
-  phone: string;
+  callId: string;
+  time: Date | null;
+  day: string;
+  month: string;
+  from: string;
+  to: string;
   direction: string;
   status: string;
-  callType: string;
-  durationSeconds: number;
-  raw: Record<string, string>;
+  ringing: number;
+  talking: number;
+  wait: number;
+  client: string;
+  phone: string;
+  operator: string;
 };
 
-type PeriodMode = 'day' | 'week' | 'month' | 'quarter' | 'year';
-
-const demoUser = {
-  email: 'sebastien.schmitt57@gmail.com',
-  role: 'superadmin' as Role,
+type QueueCall = {
+  callId: string;
+  day: string;
+  month: string;
+  client: string;
+  phone: string;
+  service: 'premium' | 'forfait' | 'autre';
+  treated: boolean;
+  abandoned: boolean;
+  wait: number;
+  rows: Row[];
 };
 
-const defaultPermissions = [
-  'dashboard',
-  'monthly',
-  'clients',
-  'operators',
-  'abandoned',
-  'settings',
-];
+const user = { email: 'sebastien.schmitt57@gmail.com', role: 'superadmin' };
+const views = ['dashboard', 'monthly', 'clients', 'operators', 'abandoned', 'settings'];
 
-function normalize(value: unknown): string {
-  return String(value ?? '').trim();
+function norm(value: unknown) { return String(value ?? '').trim(); }
+function sec(value: string) {
+  const p = norm(value).split(':').map(Number);
+  if (p.length === 3 && p.every(Number.isFinite)) return p[0] * 3600 + p[1] * 60 + p[2];
+  if (p.length === 2 && p.every(Number.isFinite)) return p[0] * 60 + p[1];
+  return Number(norm(value).replace(',', '.')) || 0;
 }
-
-function pick(row: Record<string, string>, keys: string[]): string {
-  const entries = Object.entries(row);
-  for (const key of keys) {
-    const found = entries.find(([name]) => name.toLowerCase().replace(/\s+/g, '') === key.toLowerCase().replace(/\s+/g, ''));
-    if (found) return normalize(found[1]);
+function fmt(total: number) {
+  const n = Math.max(0, Math.round(total || 0));
+  const h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), s = n % 60;
+  return [h, m, s].map(x => String(x).padStart(2, '0')).join(':');
+}
+function parseDate(value: string) {
+  if (!value || value === 'Totals') return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function key(date: Date | null) {
+  if (!date) return 'inconnu';
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function inHours(date: Date | null) {
+  if (!date) return false;
+  const v = date.getHours() + date.getMinutes() / 60;
+  return v >= 8 && v < 18;
+}
+function splitCsvLine(line: string, separator: string) {
+  const out: string[] = [];
+  let cur = '', quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i], n = line[i + 1];
+    if (c === '"' && quoted && n === '"') { cur += '"'; i++; }
+    else if (c === '"') quoted = !quoted;
+    else if (c === separator && !quoted) { out.push(cur.trim().replace(/^"|"$/g, '')); cur = ''; }
+    else cur += c;
   }
-  return '';
+  out.push(cur.trim().replace(/^"|"$/g, ''));
+  return out;
 }
-
-function parseDate(value: string): Date | null {
-  if (!value) return null;
-  const cleaned = value.replace(/\./g, '/').replace('T', ' ');
-  const direct = new Date(cleaned);
-  if (!Number.isNaN(direct.getTime())) return direct;
-  const match = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-  if (!match) return null;
-  const [, d, m, y, hh = '0', mm = '0', ss = '0'] = match;
-  const fullYear = y.length === 2 ? `20${y}` : y;
-  return new Date(Number(fullYear), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+function parseCsv(text: string) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [] as Record<string, string>[];
+  const sep = lines[0].includes(';') ? ';' : ',';
+  const headers = splitCsvLine(lines[0], sep);
+  return lines.slice(1).map(line => Object.fromEntries(splitCsvLine(line, sep).map((cell, i) => [headers[i] || `col${i}`, cell])));
 }
-
-function parseDuration(value: string): number {
-  if (!value) return 0;
-  const parts = value.split(':').map((part) => Number(part));
-  if (parts.every((part) => Number.isFinite(part))) {
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-  }
-  const num = Number(value.replace(',', '.'));
-  return Number.isFinite(num) ? num : 0;
+function operatorName(value: string) {
+  const s = norm(value), l = s.toLowerCase();
+  if (!s || l.includes('client premium') || l.includes('client forfait') || l.includes('queue') || l.includes('repondeur') || l.includes('répondeur')) return '';
+  if (/\bA\d{1,3}\b/i.test(s) || !/\(\d+\)/.test(s)) return '';
+  return s.replace(/\(\d+\)/g, '').split(',').map(x => x.trim()).filter(Boolean).reverse().join(' ');
 }
-
-function parseCsv(text: string): Record<string, string>[] {
-  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (lines.length < 2) return [];
-  const separator = lines[0].includes(';') ? ';' : ',';
-  const split = (line: string) => {
-    const cells: string[] = [];
-    let current = '';
-    let quoted = false;
-    for (const char of line) {
-      if (char === '"') quoted = !quoted;
-      else if (char === separator && !quoted) {
-        cells.push(current.trim().replace(/^"|"$/g, ''));
-        current = '';
-      } else current += char;
-    }
-    cells.push(current.trim().replace(/^"|"$/g, ''));
-    return cells;
-  };
-  const headers = split(lines[0]);
-  return lines.slice(1).map((line) => {
-    const cells = split(line);
-    return Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? '']));
-  });
+function phoneFrom(value: string) { return norm(value).match(/0\d{6,}/)?.[0] || ''; }
+function clientFrom(row: Record<string, string>) {
+  const details = row['Call Activity Details'] || '';
+  const m = details.match(/A\d+\s+([^()→]+)\s*\((0\d{6,})\)/i) || details.match(/:\s*([^()→]+)\s*\((0\d{6,})\)/i);
+  return norm(m?.[1]) || norm(row.From) || 'Client non identifié';
 }
-
-function mapRows(rows: Record<string, string>[]): CallRow[] {
-  return rows.map((row, index) => {
-    const dateValue = pick(row, ['Time', 'Date', 'Call Time', 'StartTime', 'Heure', 'DateHeure']);
-    const callTime = parseDate(dateValue);
-    const client = pick(row, ['Client', 'Customer', 'Destination', 'ToName', 'NomClient']) || 'Client non identifié';
-    const operatorName = pick(row, ['Operator', 'Agent', 'FromName', 'AnsweredBy', 'Operatrice']) || 'Non attribué';
-    const status = pick(row, ['Status', 'Etat', 'Result', 'CallStatus']);
-    const direction = pick(row, ['Direction', 'Type', 'CallDirection']);
-    const callType = pick(row, ['CallType', 'TypeAppel', 'Queue', 'Groupe']);
-    const phone = pick(row, ['Phone', 'Number', 'CallerID', 'From', 'Numero']);
-    const durationSeconds = parseDuration(pick(row, ['Duration', 'Talking', 'TalkTime', 'Duree']));
-    const dayKey = callTime ? callTime.toISOString().slice(0, 10) : 'inconnu';
-    const monthKey = callTime ? callTime.toISOString().slice(0, 7) : 'inconnu';
+function service(row: Row) {
+  const t = `${row.to} ${row.from}`.toLowerCase();
+  if (t.includes('client premium')) return 'premium' as const;
+  if (t.includes('client forfait')) return 'forfait' as const;
+  return 'autre' as const;
+}
+function mapRows(raw: Record<string, string>[]): Row[] {
+  return raw.map((r, i) => {
+    const time = parseDate(r['Call Time']);
+    const ringing = sec(r.Ringing), talking = sec(r.Talking);
     return {
-      id: `${index}-${phone}-${dateValue}`,
-      callTime,
-      dayKey,
-      monthKey,
-      hour: callTime?.getHours() ?? null,
-      minute: callTime?.getMinutes() ?? null,
-      client,
-      operatorName,
-      phone,
-      direction,
-      status,
-      callType,
-      durationSeconds,
-      raw: row,
+      id: `${i}-${r['Call ID'] || ''}`,
+      callId: norm(r['Call ID']) || String(i),
+      time,
+      day: key(time),
+      month: key(time).slice(0, 7),
+      from: norm(r.From),
+      to: norm(r.To),
+      direction: norm(r.Direction),
+      status: norm(r.Status),
+      ringing,
+      talking,
+      wait: Math.max(ringing, talking),
+      client: clientFrom(r),
+      phone: phoneFrom(r.From) || phoneFrom(r['Call Activity Details'] || ''),
+      operator: operatorName(r.To) || operatorName(r.From) || 'Non attribué',
     };
-  });
+  }).filter(r => r.time);
 }
-
-function isAbandoned(row: CallRow): boolean {
-  const text = `${row.status} ${row.direction} ${row.callType}`.toLowerCase();
-  return text.includes('abandon') || text.includes('missed') || text.includes('unanswered') || text.includes('no answer');
+function isQueue(r: Row) { return r.direction.toLowerCase() === 'inbound queue'; }
+function isWaiting(r: Row) { return r.status.toLowerCase() === 'waiting'; }
+function isUnanswered(r: Row) { return r.status.toLowerCase() === 'unanswered'; }
+function isAnswered(r: Row) { return r.status.toLowerCase() === 'answered'; }
+function isInbound(r: Row) { return r.direction.toLowerCase() === 'inbound'; }
+function isOutbound(r: Row) { return r.direction.toLowerCase() === 'outbound'; }
+function isInternal(r: Row) { return r.direction.toLowerCase() === 'internal'; }
+function queueCalls(rows: Row[]) {
+  const map = new Map<string, QueueCall>();
+  for (const r of rows) {
+    if (!inHours(r.time) || !isQueue(r) || (!isWaiting(r) && !isUnanswered(r))) continue;
+    const q = map.get(r.callId) || { callId: r.callId, day: r.day, month: r.month, client: r.client, phone: r.phone, service: service(r), treated: false, abandoned: false, wait: 0, rows: [] };
+    if (r.client && r.client !== 'Client non identifié') q.client = r.client;
+    if (r.phone && !q.phone) q.phone = r.phone;
+    if (q.service === 'autre') q.service = service(r);
+    q.wait = Math.max(q.wait, r.wait);
+    if (isWaiting(r)) q.treated = true;
+    if (isUnanswered(r)) q.abandoned = true;
+    q.rows.push(r);
+    map.set(r.callId, q);
+  }
+  return [...map.values()];
 }
-
-function isAnswered(row: CallRow): boolean {
-  const text = `${row.status} ${row.direction}`.toLowerCase();
-  return text.includes('answer') || text.includes('answered') || text.includes('répondu') || row.durationSeconds > 0;
-}
-
-function isInternal(row: CallRow): boolean {
-  const text = `${row.direction} ${row.callType}`.toLowerCase();
-  return text.includes('internal') || text.includes('interne');
-}
-
-function isOutbound(row: CallRow): boolean {
-  const text = `${row.direction} ${row.callType}`.toLowerCase();
-  return text.includes('outbound') || text.includes('sortant');
-}
-
-function isPremium(row: CallRow): boolean {
-  return `${row.callType} ${row.client}`.toLowerCase().includes('premium');
-}
-
-function summarize(rows: CallRow[]) {
-  const total = rows.length;
-  const abandoned = rows.filter(isAbandoned).length;
-  const answered = rows.filter(isAnswered).length;
-  const internal = rows.filter(isInternal).length;
-  const outbound = rows.filter(isOutbound).length;
-  const premiumAbandoned = rows.filter((row) => isAbandoned(row) && isPremium(row)).length;
-  const avgDuration = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.durationSeconds, 0) / rows.length) : 0;
+function rowsOf(calls: QueueCall[]) { return calls.flatMap(c => c.rows); }
+function summarize(rows: Row[]) {
+  const business = rows.filter(r => inHours(r.time));
+  const queue = queueCalls(business);
+  const treated = queue.filter(q => q.treated);
+  const abandoned = queue.filter(q => !q.treated && q.abandoned);
+  const total = treated.length + abandoned.length;
   return {
-    total,
-    answered,
-    abandoned,
-    internal,
-    outbound,
-    premiumAbandoned,
-    avgDuration,
-    answerRate: total ? Math.round((answered / total) * 1000) / 10 : 0,
-    abandonRate: total ? Math.round((abandoned / total) * 1000) / 10 : 0,
+    queue, treated, abandoned, total,
+    waitingNow: 0,
+    maxWait: queue.reduce((m, q) => Math.max(m, q.wait), 0),
+    premiumAbandoned: abandoned.filter(q => q.service === 'premium').length,
+    internal: business.filter(r => isInternal(r) && isAnswered(r)).length,
+    outbound: business.filter(r => isOutbound(r) && isAnswered(r) && r.talking >= 10).length,
+    answerRate: total ? Math.round(treated.length / total * 1000) / 10 : 0,
+    abandonRate: total ? Math.round(abandoned.length / total * 1000) / 10 : 0,
   };
 }
-
-function groupBy<T>(items: T[], keyGetter: (item: T) => string) {
+function groupBy<T>(items: T[], fn: (item: T) => string) {
   const map = new Map<string, T[]>();
-  for (const item of items) {
-    const key = keyGetter(item);
-    map.set(key, [...(map.get(key) ?? []), item]);
-  }
+  for (const item of items) map.set(fn(item), [...(map.get(fn(item)) || []), item]);
   return map;
 }
 
 function App() {
-  const [rows, setRows] = useState<CallRow[]>([]);
-  const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
-  const [selectedClient, setSelectedClient] = useState('all');
-  const [selectedOperator, setSelectedOperator] = useState('all');
-  const [detail, setDetail] = useState<CallRow[] | null>(null);
-
-  const clients = useMemo(() => Array.from(new Set(rows.map((row) => row.client))).sort(), [rows]);
-  const operators = useMemo(() => Array.from(new Set(rows.map((row) => row.operatorName))).sort(), [rows]);
-
-  const filteredRows = useMemo(() => rows.filter((row) => {
-    if (selectedClient !== 'all' && row.client !== selectedClient) return false;
-    if (selectedOperator !== 'all' && row.operatorName !== selectedOperator) return false;
-    return true;
-  }), [rows, selectedClient, selectedOperator]);
-
-  const stats = useMemo(() => summarize(filteredRows), [filteredRows]);
-
-  const dailyChart = useMemo(() => {
-    const grouped = groupBy(filteredRows, (row) => row.dayKey);
-    return Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([day, list]) => ({
-      day: day.slice(5),
-      appels: list.length,
-      repondus: list.filter(isAnswered).length,
-      abandonnes: list.filter(isAbandoned).length,
-    }));
-  }, [filteredRows]);
-
-  const monthlyChart = useMemo(() => {
-    const grouped = groupBy(filteredRows, (row) => row.monthKey);
-    return Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([month, list]) => ({
-      month,
-      appels: list.length,
-      repondus: list.filter(isAnswered).length,
-      abandonnes: list.filter(isAbandoned).length,
-    }));
-  }, [filteredRows]);
-
-  const byClient = useMemo(() => {
-    const grouped = groupBy(filteredRows, (row) => row.client);
-    return Array.from(grouped.entries()).map(([client, list]) => ({ client, ...summarize(list), rows: list })).sort((a, b) => b.total - a.total).slice(0, 20);
-  }, [filteredRows]);
-
-  const byOperator = useMemo(() => {
-    const grouped = groupBy(filteredRows, (row) => row.operatorName);
-    return Array.from(grouped.entries()).map(([operatorName, list]) => ({ operatorName, ...summarize(list), rows: list })).sort((a, b) => b.answered - a.answered).slice(0, 20);
-  }, [filteredRows]);
-
-  async function handleFile(file: File) {
-    const text = await file.text();
-    const parsed = mapRows(parseCsv(text));
-    setRows(parsed);
-  }
-
-  return (
-    <main className="appShell">
-      <aside className="sidebar">
-        <div className="brand">Nexus <span>V2</span></div>
-        <div className="userBox"><Shield size={18} /> {demoUser.email}<small>{demoUser.role}</small></div>
-        <nav>{defaultPermissions.map((item) => <button key={item}>{item}</button>)}</nav>
-      </aside>
-
-      <section className="content">
-        <header className="topbar">
-          <div>
-            <h1>Statistiques appels SALC</h1>
-            <p>Version légère : import CSV, KPI, courbes, clients, opératrices et base prête pour multi-utilisateurs.</p>
-          </div>
-          <label className="uploadButton">
-            <Upload size={18} /> Importer export 3CX
-            <input type="file" accept=".csv,text/csv" onChange={(event) => event.target.files?.[0] && handleFile(event.target.files[0])} />
-          </label>
-        </header>
-
-        <section className="filters">
-          <label>Période<select value={periodMode} onChange={(event) => setPeriodMode(event.target.value as PeriodMode)}><option value="day">Jour</option><option value="week">Semaine</option><option value="month">Mois</option><option value="quarter">Trimestre</option><option value="year">Année</option></select></label>
-          <label>Client<select value={selectedClient} onChange={(event) => setSelectedClient(event.target.value)}><option value="all">Tous</option>{clients.map((client) => <option key={client}>{client}</option>)}</select></label>
-          <label>Opératrice<select value={selectedOperator} onChange={(event) => setSelectedOperator(event.target.value)}><option value="all">Toutes</option>{operators.map((operatorName) => <option key={operatorName}>{operatorName}</option>)}</select></label>
-          <div className="periodHint"><CalendarDays size={16} /> Mode actif : {periodMode}. Les indicateurs sont recalculés dynamiquement.</div>
-        </section>
-
-        <section className="cards">
-          <StatCard title="Appels reçus" value={stats.total} onClick={() => setDetail(filteredRows)} />
-          <StatCard title="Répondus" value={stats.answered} suffix={`${stats.answerRate}%`} onClick={() => setDetail(filteredRows.filter(isAnswered))} />
-          <StatCard title="Abandonnés" value={stats.abandoned} suffix={`${stats.abandonRate}%`} tone="danger" onClick={() => setDetail(filteredRows.filter(isAbandoned))} />
-          <StatCard title="Premium abandonnés" value={stats.premiumAbandoned} tone="warning" onClick={() => setDetail(filteredRows.filter((row) => isAbandoned(row) && isPremium(row)))} />
-          <StatCard title="Internes" value={stats.internal} onClick={() => setDetail(filteredRows.filter(isInternal))} />
-          <StatCard title="Sortants" value={stats.outbound} onClick={() => setDetail(filteredRows.filter(isOutbound))} />
-        </section>
-
-        {rows.length === 0 ? <section className="emptyState"><PhoneCall size={32} /><h2>Importer un export 3CX pour démarrer</h2><p>La V2 analyse le fichier immédiatement et prépare les vues dynamiques.</p></section> : null}
-
-        <section className="grid2">
-          <Panel title="Courbe par jour">
-            <ResponsiveContainer width="100%" height={280}><LineChart data={dailyChart}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis /><Tooltip /><Line type="monotone" dataKey="appels" /><Line type="monotone" dataKey="repondus" /><Line type="monotone" dataKey="abandonnes" /></LineChart></ResponsiveContainer>
-          </Panel>
-          <Panel title="Vue annuelle / mensuelle">
-            <ResponsiveContainer width="100%" height={280}><BarChart data={monthlyChart}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip /><Bar dataKey="appels" /><Bar dataKey="abandonnes" /></BarChart></ResponsiveContainer>
-          </Panel>
-        </section>
-
-        <section className="grid2">
-          <Panel title="Analyse clients">
-            <DataTable rows={byClient} columns={[['client', 'Client'], ['total', 'Appels'], ['answered', 'Répondus'], ['abandoned', 'Abandonnés'], ['answerRate', 'Tx réponse %']]} onOpen={(row) => setDetail(row.rows)} />
-          </Panel>
-          <Panel title="Analyse opératrices">
-            <DataTable rows={byOperator} columns={[['operatorName', 'Opératrice'], ['answered', 'Traités'], ['total', 'Total'], ['abandoned', 'Abandonnés'], ['avgDuration', 'Durée moy. s']]} onOpen={(row) => setDetail(row.rows)} />
-          </Panel>
-        </section>
-      </section>
-
-      {detail ? <DetailModal rows={detail} onClose={() => setDetail(null)} /> : null}
-    </main>
-  );
+  const [rows, setRows] = useState<Row[]>([]);
+  const [periodMode, setPeriodMode] = useState('month');
+  const [client, setClient] = useState('all');
+  const [operator, setOperator] = useState('all');
+  const [detail, setDetail] = useState<Row[] | null>(null);
+  const clients = useMemo(() => [...new Set(rows.map(r => r.client))].filter(Boolean).sort(), [rows]);
+  const operators = useMemo(() => [...new Set(rows.map(r => r.operator))].filter(o => o && o !== 'Non attribué').sort(), [rows]);
+  const filtered = useMemo(() => rows.filter(r => (client === 'all' || r.client === client) && (operator === 'all' || r.operator === operator)), [rows, client, operator]);
+  const stats = useMemo(() => summarize(filtered), [filtered]);
+  const daily = useMemo(() => [...groupBy(stats.queue, q => q.day).entries()].sort().map(([day, list]) => ({ day: day.slice(5), appels: list.length, traites: list.filter(q => q.treated).length, abandonnes: list.filter(q => !q.treated && q.abandoned).length })), [stats.queue]);
+  const monthly = useMemo(() => [...groupBy(stats.queue, q => q.month).entries()].sort().map(([month, list]) => ({ month, appels: list.length, traites: list.filter(q => q.treated).length, abandonnes: list.filter(q => !q.treated && q.abandoned).length })), [stats.queue]);
+  const byClient = useMemo(() => [...groupBy(stats.queue, q => q.client).entries()].map(([label, list]) => ({ label, total: list.length, treated: list.filter(q => q.treated).length, abandoned: list.filter(q => !q.treated && q.abandoned).length, rows: rowsOf(list) })).sort((a, b) => b.total - a.total).slice(0, 20), [stats.queue]);
+  const byOperator = useMemo(() => [...groupBy(filtered.filter(r => inHours(r.time) && isInbound(r) && isAnswered(r) && r.operator !== 'Non attribué'), r => r.operator).entries()].map(([label, list]) => ({ label, total: list.length, treated: list.length, avg: list.length ? Math.round(list.reduce((s, r) => s + r.talking, 0) / list.length) : 0, rows: list })).sort((a, b) => b.total - a.total).slice(0, 20), [filtered]);
+  async function handleFile(file: File) { setRows(mapRows(parseCsv(await file.text()))); }
+  return <main className="appShell"><aside className="sidebar"><div className="brand">Nexus <span>V2</span></div><div className="userBox"><Shield size={18}/>{user.email}<small>{user.role}</small></div><nav>{views.map(v => <button key={v}>{v}</button>)}</nav></aside><section className="content"><header className="topbar"><div><h1>Statistiques appels SALC</h1><p>Base 3CX officielle : 08h00-18h00, Inbound Queue + Waiting / Unanswered.</p></div><label className="uploadButton"><Upload size={18}/> Importer export 3CX<input type="file" accept=".csv,text/csv" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}/></label></header><section className="filters"><label>Période<select value={periodMode} onChange={e => setPeriodMode(e.target.value)}><option value="day">Jour</option><option value="week">Semaine</option><option value="month">Mois</option><option value="quarter">Trimestre</option><option value="year">Année</option></select></label><label>Client<select value={client} onChange={e => setClient(e.target.value)}><option value="all">Tous</option>{clients.map(c => <option key={c}>{c}</option>)}</select></label><label>Opératrice<select value={operator} onChange={e => setOperator(e.target.value)}><option value="all">Toutes</option>{operators.map(o => <option key={o}>{o}</option>)}</select></label><div className="periodHint"><CalendarDays size={16}/> Les indicateurs sont recalculés dynamiquement.</div></section><section className="cards"><Stat title="En attente d'appels" value={stats.waitingNow} onClick={() => setDetail([])}/><Stat title="Appels traités" value={stats.treated.length} suffix={`${stats.answerRate}%`} onClick={() => setDetail(rowsOf(stats.treated))}/><Stat title="Appels abandonnés" value={stats.abandoned.length} suffix={`${stats.abandonRate}%`} tone="danger" onClick={() => setDetail(rowsOf(stats.abandoned))}/><Stat title="Attente la plus longue" value={fmt(stats.maxWait)} onClick={() => setDetail(rowsOf(stats.queue.filter(q => q.wait === stats.maxWait)))}/><Stat title="Total file" value={stats.total} onClick={() => setDetail(rowsOf(stats.queue))}/><Stat title="Premium abandonnés" value={stats.premiumAbandoned} tone="warning" onClick={() => setDetail(rowsOf(stats.abandoned.filter(q => q.service === 'premium')))}/><Stat title="Internes" value={stats.internal} onClick={() => setDetail(filtered.filter(r => inHours(r.time) && isInternal(r) && isAnswered(r)))}/><Stat title="Sortants" value={stats.outbound} onClick={() => setDetail(filtered.filter(r => inHours(r.time) && isOutbound(r) && isAnswered(r) && r.talking >= 10))}/></section>{!rows.length && <section className="emptyState"><PhoneCall size={32}/><h2>Importer un export 3CX pour démarrer</h2><p>La V2 analyse le fichier immédiatement.</p></section>}<section className="grid2"><Panel title="Courbe par jour"><ResponsiveContainer width="100%" height={280}><LineChart data={daily}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="day"/><YAxis/><Tooltip/><Line type="monotone" dataKey="appels"/><Line type="monotone" dataKey="traites"/><Line type="monotone" dataKey="abandonnes"/></LineChart></ResponsiveContainer></Panel><Panel title="Vue annuelle / mensuelle"><ResponsiveContainer width="100%" height={280}><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="month"/><YAxis/><Tooltip/><Bar dataKey="appels"/><Bar dataKey="abandonnes"/></BarChart></ResponsiveContainer></Panel></section><section className="grid2"><Panel title="Analyse clients"><Table rows={byClient} columns={[["label", "Client"], ["total", "Total file"], ["treated", "Traités"], ["abandoned", "Abandonnés"]]} onOpen={r => setDetail(r.rows)}/></Panel><Panel title="Analyse opératrices"><Table rows={byOperator} columns={[["label", "Opératrice"], ["total", "Décrochés"], ["avg", "Durée moy. s"]]} onOpen={r => setDetail(r.rows)}/></Panel></section></section>{detail && <Detail rows={detail} onClose={() => setDetail(null)}/>}</main>;
 }
+function Stat({ title, value, suffix, tone, onClick }: { title: string; value: number | string; suffix?: string; tone?: 'danger' | 'warning'; onClick: () => void }) { return <button className={`statCard ${tone || ''}`} onClick={onClick}><span>{title}</span><b>{typeof value === 'number' ? value.toLocaleString('fr-FR') : value}</b>{suffix && <small>{suffix}</small>}</button>; }
+function Panel({ title, children }: { title: string; children: React.ReactNode }) { return <section className="panel"><h2>{title}</h2>{children}</section>; }
+function Table({ rows, columns, onOpen }: { rows: any[]; columns: [string, string][]; onOpen: (row: any) => void }) { return <div className="tableWrap"><table><thead><tr>{columns.map(([, l]) => <th key={l}>{l}</th>)}<th>Détail</th></tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{columns.map(([k]) => <td key={k}>{r[k]}</td>)}<td><button className="small" onClick={() => onOpen(r)}>Ouvrir</button></td></tr>)}</tbody></table></div>; }
+function Detail({ rows, onClose }: { rows: Row[]; onClose: () => void }) { return <div className="modalBackdrop"><div className="modal"><header><h2>Détail des appels</h2><button onClick={onClose}>Fermer</button></header><div className="tableWrap"><table><thead><tr><th>Date</th><th>Client</th><th>Opératrice</th><th>Téléphone</th><th>Direction</th><th>Statut</th><th>Attente</th><th>Durée</th></tr></thead><tbody>{rows.slice(0, 500).map(r => <tr key={r.id}><td>{r.time?.toLocaleString('fr-FR') || '-'}</td><td>{r.client}</td><td>{r.operator}</td><td>{r.phone}</td><td>{r.direction}</td><td>{r.status}</td><td>{fmt(r.wait)}</td><td>{fmt(r.talking)}</td></tr>)}</tbody></table></div></div></div>; }
 
-function StatCard({ title, value, suffix, tone, onClick }: { title: string; value: number; suffix?: string; tone?: 'danger' | 'warning'; onClick: () => void }) {
-  return <button className={`statCard ${tone ?? ''}`} onClick={onClick}><span>{title}</span><b>{value}</b>{suffix ? <small>{suffix}</small> : null}</button>;
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="panel"><h2>{title}</h2>{children}</section>;
-}
-
-function DataTable({ rows, columns, onOpen }: { rows: any[]; columns: [string, string][]; onOpen: (row: any) => void }) {
-  return <div className="tableWrap"><table><thead><tr>{columns.map(([, label]) => <th key={label}>{label}</th>)}<th>Détail</th></tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{columns.map(([key]) => <td key={key}>{row[key]}</td>)}<td><button className="small" onClick={() => onOpen(row)}>Ouvrir</button></td></tr>)}</tbody></table></div>;
-}
-
-function DetailModal({ rows, onClose }: { rows: CallRow[]; onClose: () => void }) {
-  return <div className="modalBackdrop"><div className="modal"><header><h2>Détail des appels</h2><button onClick={onClose}>Fermer</button></header><div className="tableWrap"><table><thead><tr><th>Date</th><th>Client</th><th>Opératrice</th><th>Téléphone</th><th>Statut</th><th>Type</th><th>Durée</th></tr></thead><tbody>{rows.slice(0, 500).map((row) => <tr key={row.id}><td>{row.callTime?.toLocaleString('fr-FR') ?? '-'}</td><td>{row.client}</td><td>{row.operatorName}</td><td>{row.phone}</td><td>{row.status}</td><td>{row.callType}</td><td>{row.durationSeconds}s</td></tr>)}</tbody></table></div></div></div>;
-}
-
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(<App/>);
