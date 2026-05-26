@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { PhoneCall, Shield } from 'lucide-react';
 import './styles.css';
 
-import type { AbandonedReportRow, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
+import type { AbandonedReportRow, CallPath, ChartMetric, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
 import { AbandonedView } from './components/AbandonedView';
 import { DashboardView } from './components/DashboardView';
 import { DataTable } from './components/DataTable';
@@ -81,83 +81,98 @@ function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, 
   return date.getFullYear() === anchor.getFullYear();
 }
 
-function makeEmptyBucket(label: string) {
-  return { month: label, total: 0, traites: 0, abandonnes: 0 };
+function metricValue(calls: CallPath[], rows: Row[], metric: ChartMetric, callbackSettings: { families: Service[]; minAbandon: number; minCallback: number; minUserCallback: number }) {
+  const summary = summarize(calls, rows, callbackSettings);
+
+  if (metric === 'invoiceTotal') return summary.invoiceTotal;
+  if (metric === 'treated') return summary.treated.length;
+  if (metric === 'abandoned') return summary.abandoned.length;
+  if (metric === 'total') return summary.total;
+  if (metric === 'outbound') return summary.outbound;
+  if (metric === 'callbacksDone') return summary.callbacksDone;
+  if (metric === 'callbacksRemaining') return summary.callbacksRemaining;
+  if (metric === 'internal') return summary.internal;
+  if (metric === 'maxWait') return summary.maxWait;
+  if (metric === 'avgAbandonedWait') return Math.round(summary.avgAbandonedWait);
+  if (metric === 'avgTalk') return Math.round(summary.avgTalk);
+
+  return summary.invoiceTotal;
 }
 
-function incrementBucket(bucket: { total: number; traites: number; abandonnes: number }, calls: typeof import('./types').CallPath[]) {
-  bucket.total = calls.length;
-  bucket.traites = calls.filter((call) => call.treated).length;
-  bucket.abandonnes = calls.filter((call) => call.abandoned).length;
+function buildMetricBucket(label: string, calls: CallPath[], rows: Row[], metric: ChartMetric, callbackSettings: { families: Service[]; minAbandon: number; minCallback: number; minUserCallback: number }) {
+  return {
+    month: label,
+    value: metricValue(calls, rows, metric, callbackSettings),
+  };
 }
 
-function buildChartData(calls: typeof import('./types').CallPath[], mode: PeriodMode, anchor: Date | null) {
+function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor: Date | null, metric: ChartMetric, callbackSettings: { families: Service[]; minAbandon: number; minCallback: number; minUserCallback: number }) {
   if (!anchor) return [];
 
   if (mode === 'day' || mode === 'custom') {
     const datedCalls = calls.filter((call) => call.date).sort((a, b) => a.date!.getTime() - b.date!.getTime());
-    if (!datedCalls.length) return [];
+    const datedRows = rows.filter((row) => row.time).sort((a, b) => a.time!.getTime() - b.time!.getTime());
+    const firstTime = datedCalls[0]?.date || datedRows[0]?.time;
+    const lastTime = datedCalls[datedCalls.length - 1]?.date || datedRows[datedRows.length - 1]?.time;
 
-    const firstHour = datedCalls[0].date!.getHours();
-    const lastHour = datedCalls[datedCalls.length - 1].date!.getHours();
-    const byHour = groupBy(datedCalls, (call) => `${pad(call.date!.getHours())}h`);
+    if (!firstTime || !lastTime) return [];
+
+    const firstHour = firstTime.getHours();
+    const lastHour = lastTime.getHours();
+    const callsByHour = groupBy(datedCalls, (call) => `${pad(call.date!.getHours())}h`);
+    const rowsByHour = groupBy(datedRows, (row) => `${pad(row.time!.getHours())}h`);
 
     return Array.from({ length: lastHour - firstHour + 1 }, (_, index) => {
       const label = `${pad(firstHour + index)}h`;
-      const bucket = makeEmptyBucket(label);
-      incrementBucket(bucket, byHour.get(label) || []);
-      return bucket;
+      return buildMetricBucket(label, callsByHour.get(label) || [], rowsByHour.get(label) || [], metric, callbackSettings);
     });
   }
 
   if (mode === 'week') {
     const start = startOfWeek(anchor);
-    const byDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+    const callsByDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+    const rowsByDay = groupBy(rows, (row) => (row.time ? frShortDate(row.time) : 'inconnu'));
 
     return Array.from({ length: 7 }, (_, index) => {
       const date = addDays(start, index);
       const label = frShortDate(date);
-      const bucket = makeEmptyBucket(label);
-      incrementBucket(bucket, byDay.get(label) || []);
-      return bucket;
+      return buildMetricBucket(label, callsByDay.get(label) || [], rowsByDay.get(label) || [], metric, callbackSettings);
     });
   }
 
   if (mode === 'month') {
     const firstDay = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
     const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
-    const byDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+    const callsByDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
+    const rowsByDay = groupBy(rows, (row) => (row.time ? frShortDate(row.time) : 'inconnu'));
 
     return Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(firstDay);
       date.setDate(index + 1);
       const label = frShortDate(date);
-      const bucket = makeEmptyBucket(label);
-      incrementBucket(bucket, byDay.get(label) || []);
-      return bucket;
+      return buildMetricBucket(label, callsByDay.get(label) || [], rowsByDay.get(label) || [], metric, callbackSettings);
     });
   }
 
   if (mode === 'quarter') {
     const quarterStartMonth = Math.floor(anchor.getMonth() / 3) * 3;
-    const byMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+    const callsByMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+    const rowsByMonth = groupBy(rows, (row) => (row.time ? monthLabel(row.time) : 'inconnu'));
 
     return Array.from({ length: 3 }, (_, index) => {
       const date = new Date(anchor.getFullYear(), quarterStartMonth + index, 1);
       const label = monthLabel(date);
-      const bucket = makeEmptyBucket(label);
-      incrementBucket(bucket, byMonth.get(label) || []);
-      return bucket;
+      return buildMetricBucket(label, callsByMonth.get(label) || [], rowsByMonth.get(label) || [], metric, callbackSettings);
     });
   }
 
-  const byMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+  const callsByMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
+  const rowsByMonth = groupBy(rows, (row) => (row.time ? monthLabel(row.time) : 'inconnu'));
+
   return Array.from({ length: 12 }, (_, index) => {
     const date = new Date(anchor.getFullYear(), index, 1);
     const label = monthLabel(date);
-    const bucket = makeEmptyBucket(label);
-    incrementBucket(bucket, byMonth.get(label) || []);
-    return bucket;
+    return buildMetricBucket(label, callsByMonth.get(label) || [], rowsByMonth.get(label) || [], metric, callbackSettings);
   });
 }
 
@@ -169,6 +184,7 @@ function App() {
   const [detail, setDetail] = useState<DetailItem[] | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [settingsSection, setSettingsSection] = useState<ViewKey>('abandoned');
+  const [chartMetric, setChartMetric] = useState<ChartMetric>('invoiceTotal');
 
   const [users, setUsers] = useState<UserRow[]>([
     {
@@ -258,7 +274,7 @@ function App() {
   );
 
   const stats = useMemo(() => summarize(filteredCalls, filteredRows, callbackSettings), [filteredCalls, filteredRows, callbackSettings]);
-  const chartData = useMemo(() => buildChartData(filteredCalls, periodMode, anchor), [filteredCalls, periodMode, anchor]);
+  const chartData = useMemo(() => buildChartData(filteredCalls, filteredRows, periodMode, anchor, chartMetric, callbackSettings), [filteredCalls, filteredRows, periodMode, anchor, chartMetric, callbackSettings]);
 
   const byClient = useMemo(
     () =>
@@ -418,8 +434,8 @@ function App() {
           operators={operators}
         />
 
-        {activeView === 'dashboard' && <DashboardView stats={stats} rows={rows} chartData={chartData} setDetail={setDetail} setActiveView={setActiveView} />}
-        {activeView === 'monthly' && <MonthlyView data={chartData} />}
+        {activeView === 'dashboard' && <DashboardView stats={stats} rows={rows} chartData={chartData} chartMetric={chartMetric} setChartMetric={setChartMetric} setDetail={setDetail} setActiveView={setActiveView} />}
+        {activeView === 'monthly' && <MonthlyView data={chartData} chartMetric={chartMetric} setChartMetric={setChartMetric} />}
         {activeView === 'clients' && (
           <Panel title="Analyse clients">
             <DataTable rows={byClient} columns={[["label", "Client"], ["total", "Total"], ["treated", "Traites"], ["abandoned", "Abandonnes"], ["wait", "Attente"], ["talk", "Parole"]]} onOpen={(row) => setDetail(row.details)} />
