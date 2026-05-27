@@ -189,19 +189,57 @@ export function mapRows(rawRows: Record<string, string>[], parseDate: (value: st
     .filter((row) => row.time);
 }
 
-function hasUsefulHumanAnswerAfterLastParking(sorted: Row[]) {
+function usefulHumanRowsAfterParking(sorted: Row[]) {
   const lastParkingIndex = sorted.map(isParking).lastIndexOf(true);
-  if (lastParkingIndex < 0) return true;
+  if (lastParkingIndex < 0) return [];
 
-  return sorted.slice(lastParkingIndex + 1).some((row) => {
+  const rowsAfterParking = sorted.slice(lastParkingIndex + 1).filter((row) => {
     return isInbound(row) && isAnswered(row) && row.operator && !isParking(row) && !isSystemOrSupportStep(row) && row.talking > 0;
   });
+
+  const parkingPickup = sorted
+    .filter(isParking)
+    .map((row) => {
+      const operator = operatorFromActivity(row.activity);
+      return operator ? { ...row, operator } : null;
+    })
+    .filter(Boolean) as Row[];
+
+  const lastPickup = parkingPickup[parkingPickup.length - 1];
+  return rowsAfterParking.length ? rowsAfterParking : lastPickup ? [lastPickup] : [];
+}
+
+function finalOperatorAfterParking(sorted: Row[]) {
+  return usefulHumanRowsAfterParking(sorted).map((row) => row.operator).find(Boolean) || '';
+}
+
+function hasUsefulHumanAnswerAfterLastParking(sorted: Row[]) {
+  return usefulHumanRowsAfterParking(sorted).length > 0;
 }
 
 function isLostWhileParked(sorted: Row[]) {
   const hasParking = sorted.some(isParking);
   if (!hasParking) return false;
   return !hasUsefulHumanAnswerAfterLastParking(sorted);
+}
+
+function firstUsefulAnswerAfterParkingTime(sorted: Row[]) {
+  return usefulHumanRowsAfterParking(sorted).map((row) => row.time).find(Boolean) || null;
+}
+
+function waitUntilParkingPickup(queueStart: Date | null, sorted: Row[]) {
+  const pickupTime = firstUsefulAnswerAfterParkingTime(sorted);
+  if (!pickupTime || !queueStart) return 0;
+  return elapsedSeconds(queueStart, pickupTime.getTime());
+}
+
+function talkAfterParking(sorted: Row[], operator: string) {
+  const pickupTime = firstUsefulAnswerAfterParkingTime(sorted);
+  if (!pickupTime) return 0;
+
+  return sorted
+    .filter((row) => row.time && row.time >= pickupTime && row.operator === operator && isInbound(row) && isAnswered(row) && !isParking(row) && !isSystemOrSupportStep(row))
+    .reduce((sum, row) => sum + row.talking, 0);
 }
 
 export function buildCalls(rows: Row[]) {
@@ -214,18 +252,22 @@ export function buildCalls(rows: Row[]) {
     if (!queueRows.length) continue;
 
     const answeredRows = sorted.filter((row) => isInbound(row) && isAnswered(row));
-    const operator =
+    const hasParking = sorted.some(isParking);
+    const parkedLost = isLostWhileParked(sorted);
+    const parkingOperator = hasParking ? finalOperatorAfterParking(sorted) : '';
+    const normalOperator =
       answeredRows.map((row) => row.operator).find(Boolean) ||
       sorted.map((row) => row.operator).find(Boolean) ||
       operatorFromActivity(sorted.map((row) => row.activity).join(' ')) ||
       'Non identifie';
+    const operator = parkingOperator || normalOperator;
 
-    const parkedLost = isLostWhileParked(sorted);
-    const treated = queueRows.some(isWaiting) && !parkedLost;
+    const treated = hasParking ? Boolean(parkingOperator) && !parkedLost : queueRows.some(isWaiting);
     const abandoned = parkedLost || (!treated && queueRows.some(isUnanswered));
     const text = sorted.map((row) => `${row.to} ${row.from} ${row.activity}`).join(' ');
     const lastEnd = sorted.reduce((max, row) => Math.max(max, rowEndTimestamp(row)), 0);
     const baseWait = queueRows.reduce((sum, row) => sum + Math.max(row.ringing, row.talking), 0);
+    const parkingWait = hasParking && !parkedLost ? waitUntilParkingPickup(queueRows[0].time, sorted) : 0;
 
     calls.push({
       callId,
@@ -241,8 +283,8 @@ export function buildCalls(rows: Row[]) {
       operator,
       treated,
       abandoned,
-      wait: parkedLost ? Math.max(baseWait, elapsedSeconds(queueRows[0].time, lastEnd)) : baseWait,
-      talk: parkedLost ? 0 : answeredRows.reduce((sum, row) => sum + row.talking, 0),
+      wait: parkedLost ? Math.max(baseWait, elapsedSeconds(queueRows[0].time, lastEnd)) : hasParking ? Math.max(baseWait, parkingWait) : baseWait,
+      talk: parkedLost ? 0 : hasParking ? talkAfterParking(sorted, operator) : answeredRows.reduce((sum, row) => sum + row.talking, 0),
       rows: sorted,
     });
   }
@@ -261,7 +303,7 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
         date: frDateTime(call.date),
         ...base,
         step: frenchStep('File attente 3CX'),
-        status: lostWhileParked ? 'Perdu pendant parking' : call.abandoned && !call.treated ? frenchStatus('Abandoned') : frenchStatus('Transferred'),
+        status: lostWhileParked ? 'Perdu pendant parking' : call.abandoned && !call.treated ? frenchStatus('Abandoned') : hasParking ? 'Repris après parking' : frenchStatus('Transferred'),
         wait: call.wait,
         talk: 0,
       },
@@ -284,9 +326,9 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
     if (call.talk > 0) {
       items.push({
         id: `${call.callId}-talk`,
-        date: frDateTime(call.date),
+        date: frDateTime(firstUsefulAnswerAfterParkingTime(call.rows) || call.date),
         ...base,
-        step: frenchStep('Conversation operatrice'),
+        step: hasParking ? 'Conversation après parking' : frenchStep('Conversation operatrice'),
         status: frenchStatus('Answered'),
         wait: 0,
         talk: call.talk,
