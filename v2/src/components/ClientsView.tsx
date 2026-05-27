@@ -1,5 +1,5 @@
 import type { CallPath, DetailItem } from '../types';
-import { callDetails, getOperatorCallback, getUserCallback } from '../utils/calls';
+import { getOperatorCallback, getUserCallback } from '../utils/calls';
 import { formatClock } from '../utils/format';
 import { DataTable } from './DataTable';
 import { Panel } from './Panel';
@@ -21,6 +21,25 @@ function median(values: number[]) {
 
 function isClientName(value: string) {
   return Boolean(value && value !== 'Client non identifie' && /[A-Za-zÀ-ÿ]/.test(value));
+}
+
+function hhmm(date: Date | null) {
+  if (!date) return '-';
+  return `${String(date.getHours()).padStart(2, '0')}h${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function callLineDetails(calls: CallPath[]): DetailItem[] {
+  return calls.map((call) => ({
+    id: call.callId,
+    date: hhmm(call.date),
+    client: call.client,
+    operator: call.operator || 'Non identifie',
+    phone: call.phone,
+    step: call.treated ? 'Appel traité' : 'Appel non traité',
+    status: call.treated ? `Traité par ${call.operator || 'Non identifié'}` : 'Non traité / abandonné',
+    wait: call.wait,
+    talk: call.talk,
+  }));
 }
 
 export function ClientsView({ calls, callbackSettings, outboundRows, businessRows, setDetail }: ClientsViewProps) {
@@ -45,16 +64,20 @@ export function ClientsView({ calls, callbackSettings, outboundRows, businessRow
     return {
       label,
       total: list.length,
+      totalDetails: callLineDetails(list),
       treated: treated.length,
+      treatedDetails: callLineDetails(treated),
       treatedRate: list.length ? Math.round((treated.length / list.length) * 100) : 0,
       abandoned: abandoned.length,
+      abandonedDetails: callLineDetails(abandoned),
       abandonedRate: list.length ? Math.round((abandoned.length / list.length) * 100) : 0,
       recalls: recalled.length,
+      recallsDetails: callLineDetails(recalled),
       wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)),
       waitMedian: formatClock(median(waitValues)),
       talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)),
       talkMedian: formatClock(median(talkValues)),
-      details: callDetails(list),
+      details: callLineDetails(list),
     };
   }).sort((a, b) => b.total - a.total);
 
