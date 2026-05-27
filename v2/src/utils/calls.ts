@@ -46,6 +46,34 @@ export function isInternal(row: Row) {
   return row.direction.toLowerCase() === 'internal';
 }
 
+export function isParking(row: Row) {
+  const text = `${row.to} ${row.from} ${row.activity}`.toLowerCase();
+  return text.includes('shared parking') || text.includes('parking') || /\bsp\d+\b/i.test(text);
+}
+
+export function isSystemOrSupportStep(row: Row) {
+  const text = `${row.to} ${row.from} ${row.activity}`.toLowerCase();
+  return (
+    text.includes('support d') ||
+    text.includes('support') ||
+    text.includes('voice mail') ||
+    text.includes('voicemail') ||
+    text.includes('repondeur') ||
+    text.includes('répondeur') ||
+    text.includes('shared parking')
+  );
+}
+
+function rowEndTimestamp(row: Row) {
+  const duration = Math.max(row.talking, row.ringing, 1);
+  return (row.time?.getTime() || 0) + duration * 1000;
+}
+
+function elapsedSeconds(start: Date | null, endTimestamp: number) {
+  if (!start) return 0;
+  return Math.max(0, Math.round((endTimestamp - start.getTime()) / 1000));
+}
+
 export function phoneFrom(value: string) {
   return String(value || '').trim().match(/0\d{6,}/)?.[0] || '';
 }
@@ -161,6 +189,21 @@ export function mapRows(rawRows: Record<string, string>[], parseDate: (value: st
     .filter((row) => row.time);
 }
 
+function hasUsefulHumanAnswerAfterLastParking(sorted: Row[]) {
+  const lastParkingIndex = sorted.map(isParking).lastIndexOf(true);
+  if (lastParkingIndex < 0) return true;
+
+  return sorted.slice(lastParkingIndex + 1).some((row) => {
+    return isInbound(row) && isAnswered(row) && row.operator && !isParking(row) && !isSystemOrSupportStep(row) && row.talking > 0;
+  });
+}
+
+function isLostWhileParked(sorted: Row[]) {
+  const hasParking = sorted.some(isParking);
+  if (!hasParking) return false;
+  return !hasUsefulHumanAnswerAfterLastParking(sorted);
+}
+
 export function buildCalls(rows: Row[]) {
   const calls: CallPath[] = [];
 
@@ -177,9 +220,12 @@ export function buildCalls(rows: Row[]) {
       operatorFromActivity(sorted.map((row) => row.activity).join(' ')) ||
       'Non identifie';
 
-    const treated = queueRows.some(isWaiting);
-    const abandoned = !treated && queueRows.some(isUnanswered);
+    const parkedLost = isLostWhileParked(sorted);
+    const treated = queueRows.some(isWaiting) && !parkedLost;
+    const abandoned = parkedLost || (!treated && queueRows.some(isUnanswered));
     const text = sorted.map((row) => `${row.to} ${row.from} ${row.activity}`).join(' ');
+    const lastEnd = sorted.reduce((max, row) => Math.max(max, rowEndTimestamp(row)), 0);
+    const baseWait = queueRows.reduce((sum, row) => sum + Math.max(row.ringing, row.talking), 0);
 
     calls.push({
       callId,
@@ -195,8 +241,8 @@ export function buildCalls(rows: Row[]) {
       operator,
       treated,
       abandoned,
-      wait: queueRows.reduce((sum, row) => sum + Math.max(row.ringing, row.talking), 0),
-      talk: answeredRows.reduce((sum, row) => sum + row.talking, 0),
+      wait: parkedLost ? Math.max(baseWait, elapsedSeconds(queueRows[0].time, lastEnd)) : baseWait,
+      talk: parkedLost ? 0 : answeredRows.reduce((sum, row) => sum + row.talking, 0),
       rows: sorted,
     });
   }
@@ -207,17 +253,33 @@ export function buildCalls(rows: Row[]) {
 export function callDetails(calls: CallPath[]): DetailItem[] {
   return calls.flatMap((call) => {
     const base = { client: call.client, operator: call.operator, phone: call.phone };
+    const hasParking = call.rows.some(isParking);
+    const lostWhileParked = hasParking && call.abandoned && !call.treated;
     const items: DetailItem[] = [
       {
         id: `${call.callId}-wait`,
         date: frDateTime(call.date),
         ...base,
         step: frenchStep('File attente 3CX'),
-        status: call.abandoned && !call.treated ? frenchStatus('Abandoned') : frenchStatus('Transferred'),
+        status: lostWhileParked ? 'Perdu pendant parking' : call.abandoned && !call.treated ? frenchStatus('Abandoned') : frenchStatus('Transferred'),
         wait: call.wait,
         talk: 0,
       },
     ];
+
+    if (hasParking) {
+      call.rows.filter(isParking).forEach((row, index) => {
+        items.push({
+          id: `${call.callId}-parking-${index}`,
+          date: frDateTime(row.time),
+          ...base,
+          step: 'Appel parqué',
+          status: lostWhileParked && index === call.rows.filter(isParking).length - 1 ? 'Perdu pendant parking' : 'Parqué',
+          wait: Math.max(row.ringing, row.talking),
+          talk: 0,
+        });
+      });
+    }
 
     if (call.talk > 0) {
       items.push({
@@ -236,8 +298,8 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
         id: `${call.callId}-lost`,
         date: frDateTime(call.date),
         ...base,
-        step: frenchStep('Fin appel'),
-        status: frenchStatus('Unanswered'),
+        step: lostWhileParked ? 'Fin appel parqué' : frenchStep('Fin appel'),
+        status: lostWhileParked ? 'À rappeler' : frenchStatus('Unanswered'),
         wait: 0,
         talk: 0,
       });
@@ -298,6 +360,10 @@ export function getUserCallback(call: CallPath, allRows: Row[], minUserCallback:
 }
 
 export function statusForAbandon(call: CallPath, operatorCallback: CallbackInfo, userCallback: CallbackInfo) {
+  const parkedLost = call.rows.some(isParking) && call.abandoned && !call.treated;
+  if (parkedLost && operatorCallback) return 'Traité après perte parking';
+  if (parkedLost && userCallback) return 'Utilisateur a déjà rappelé après parking';
+  if (parkedLost) return 'À rappeler - perdu pendant parking';
   if (call.wait < 5) return 'Appel de moins de 5 secondes';
   if (operatorCallback && userCallback) return 'Traité + rappel utilisateur';
   if (operatorCallback) return 'Traité';
