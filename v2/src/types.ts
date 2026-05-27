@@ -2,6 +2,14 @@ export type ViewKey = 'dashboard' | 'monthly' | 'clients' | 'operators' | 'aband
 export type PeriodMode = 'custom' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 export type Service = 'premium' | 'forfait' | 'autre';
 export type DurationFilter = 'all' | 'gt5' | 'gt10' | 'gt30' | 'gt60';
+export type AbandonedStatusFilter =
+  | 'all'
+  | 'toCall'
+  | 'operatorDone'
+  | 'userCalledBack'
+  | 'under5'
+  | 'lostParking'
+  | 'treatedAfterParking';
 export type ChartMetric =
   | 'invoiceTotal'
   | 'treated'
