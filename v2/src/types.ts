@@ -4,6 +4,7 @@ export type Service = 'premium' | 'forfait' | 'autre';
 export type DurationFilter = 'all' | 'gt5' | 'gt10' | 'gt30' | 'gt60';
 export type UserType = 'Operatrice' | 'Responsable' | 'Admin' | 'Autre';
 export type UserViewMode = 'Vue solo' | 'Vue equipe';
+export type ChartBucket = 'hour' | 'm30' | 'm15' | 'm10' | 'm5' | 'minute';
 export type AbandonedStatusFilter =
   | 'all'
   | 'toCall'
