@@ -2,6 +2,8 @@ export type ViewKey = 'dashboard' | 'monthly' | 'clients' | 'operators' | 'aband
 export type PeriodMode = 'custom' | 'day' | 'week' | 'month' | 'quarter' | 'year';
 export type Service = 'premium' | 'forfait' | 'autre';
 export type DurationFilter = 'all' | 'gt5' | 'gt10' | 'gt30' | 'gt60';
+export type UserType = 'Operatrice' | 'Responsable' | 'Admin' | 'Autre';
+export type UserViewMode = 'Vue solo' | 'Vue equipe';
 export type AbandonedStatusFilter =
   | 'all'
   | 'toCall'
@@ -71,7 +73,12 @@ export type DetailItem = {
 
 export type UserRow = {
   id: number;
+  firstName: string;
+  lastName: string;
   email: string;
+  password: string;
+  userType: UserType;
+  viewMode: UserViewMode;
   name: string;
   role: string;
   status: string;
