@@ -35,7 +35,8 @@ export function DetailModal({ rows, onClose }: DetailModalProps) {
               <tr>
                 <th>Date</th>
                 <th>Client</th>
-                <th>Opératrice</th>
+                <th>Attribution</th>
+                <th>Opératrice dispo</th>
                 <th>Téléphone</th>
                 <th>Étape</th>
                 <th>Statut</th>
@@ -48,7 +49,8 @@ export function DetailModal({ rows, onClose }: DetailModalProps) {
                 <tr key={row.id}>
                   <td className="clickableCell" onClick={() => openNex('Date', row.date, row)}>{row.date}</td>
                   <td className="clickableCell" onClick={() => openNex('Client', row.client, row)}>{row.client}</td>
-                  <td className="clickableCell" onClick={() => openNex('Opératrice', row.operator, row)}>{row.operator}</td>
+                  <td className="clickableCell" onClick={() => openNex('Attribution', row.operator, row)}>{row.operator}</td>
+                  <td className="clickableCell" onClick={() => openNex('Opératrice dispo', row.availableOperator || '-', row)}>{row.availableOperator || '-'}</td>
                   <td className="clickableCell" onClick={() => openNex('Téléphone', row.phone, row)}>{row.phone}</td>
                   <td className="clickableCell" onClick={() => openNex('Étape', row.step, row)}>{row.step}</td>
                   <td className="clickableCell" onClick={() => openNex('Statut', row.status, row)}>{row.status}</td>
