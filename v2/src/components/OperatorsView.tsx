@@ -1,5 +1,5 @@
 import type { CallPath, DetailItem, Row } from '../types';
-import { buildOperatorAnalysis, callDetails, isAnswered, isInbound, isInternal, isOutbound, outboundDetails } from '../utils/calls';
+import { buildOperatorAnalysis, callDetails, isAnswered, isInbound, isInternal, isOutbound, isRealOperator, outboundDetails } from '../utils/calls';
 import { formatClock } from '../utils/format';
 import { DataTable } from './DataTable';
 import { Panel } from './Panel';
@@ -15,6 +15,8 @@ type OperatorRawScore = {
   inbound: number;
   outbound: number;
   probes: number;
+  availableOpportunities: number;
+  availableTakes: number;
   linkedAbandons: number;
   handledParking: number;
   parkingPickup: number;
@@ -48,6 +50,27 @@ function rangesOverlap(startA: number, endA: number, startB: number, endB: numbe
   return startA < endB && startB < endA;
 }
 
+function isClientBlockingCall(row: Row) {
+  if (isInternal(row)) return false;
+  if (!(isInbound(row) || isOutbound(row))) return false;
+  if (!isAnswered(row) || row.talking <= 0) return false;
+  return true;
+}
+
+function operatorBusyAt(operator: string, at: Date | null, rows: Row[]) {
+  if (!at) return false;
+  const timestamp = at.getTime();
+  return rows.some((row) => {
+    if (!row.time || row.operator !== operator) return false;
+    if (!isClientBlockingCall(row)) return false;
+    return row.time.getTime() <= timestamp && rowEndTime(row) >= timestamp;
+  });
+}
+
+function operatorAvailableAt(call: CallPath, operator: string, rows: Row[]) {
+  return Boolean(call.date) && !operatorBusyAt(operator, call.date, rows);
+}
+
 function operatorBusyDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
   const start = call.date.getTime();
@@ -55,8 +78,7 @@ function operatorBusyDuring(call: CallPath, operator: string, rows: Row[]) {
 
   return rows.some((row) => {
     if (!row.time || row.operator !== operator) return false;
-    if (isInternal(row)) return false;
-    if (!(isInbound(row) || isOutbound(row)) || !isAnswered(row) || row.talking <= 0) return false;
+    if (!isClientBlockingCall(row)) return false;
     return rangesOverlap(start, end, row.time.getTime(), rowEndTime(row));
   });
 }
@@ -131,14 +153,23 @@ function operatorCallbackCount(rows: Row[], operator: string) {
   return rows.filter((row) => row.operator === operator && isOutbound(row) && isAnswered(row) && row.talking >= 20).length;
 }
 
+function availableOpportunities(calls: CallPath[], operator: string, rows: Row[]) {
+  return calls.filter((call) => operatorAvailableAt(call, operator, rows)).length;
+}
+
+function availableTakes(calls: CallPath[], operator: string, rows: Row[]) {
+  return calls.filter((call) => call.treated && call.operator === operator && operatorAvailableAt(call, operator, rows)).length;
+}
+
 function sentimentExplanation(parts: ScorePart[], finalScore: number) {
   const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.formula} · ${part.source}`);
   return `Sentiment IA final : ${finalScore.toFixed(1)}/10\n${lines.join('\n')}`;
 }
 
 function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
-  const priseRate = raw.probes ? raw.inbound / raw.probes : 0;
-  const abandonPressure = raw.probes ? raw.linkedAbandons / raw.probes : raw.linkedAbandons ? 1 : 0;
+  const availablePickupRate = raw.availableOpportunities ? raw.availableTakes / raw.availableOpportunities : 0;
+  const availableMissPressure = raw.availableOpportunities ? Math.max(0, raw.availableOpportunities - raw.availableTakes) / raw.availableOpportunities : 0;
+  const abandonPressure = raw.availableOpportunities ? raw.linkedAbandons / raw.availableOpportunities : raw.linkedAbandons ? 1 : 0;
   const parkingEffort = raw.inbound ? raw.handledParking / raw.inbound : raw.handledParking ? 1 : 0;
   const parkingPickupEffort = raw.inbound ? raw.parkingPickup / raw.inbound : raw.parkingPickup ? 1 : 0;
   const callbackEffort = raw.inbound ? raw.callbackOutbounds / raw.inbound : raw.callbackOutbounds ? 1 : 0;
@@ -154,29 +185,29 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const parts: ScorePart[] = [
     {
       key: 'priseScore',
-      label: 'Qualité de prise',
-      score: ratioScore(priseRate),
-      weight: 0.18,
-      formula: 'Formule : appels entrants traités / opératrice sondée × 10.',
-      source: `Données : ${raw.inbound} entrants traités / ${raw.probes} sollicitations = ${pct(raw.inbound, raw.probes)}.`,
-      interpretation: 'Mesure la capacité à prendre les appels quand 3CX sollicite l’opératrice. Le volume brut n’est pas utilisé seul.',
-      reason: `${raw.inbound} appels pris sur ${raw.probes} sollicitations.`,
+      label: 'Prise sur disponibilité',
+      score: ratioScore(availablePickupRate),
+      weight: 0.22,
+      formula: 'Formule : appels pris quand l’opératrice était disponible / appels entrants où elle était disponible × 10.',
+      source: `Données : ${raw.availableTakes} prises disponibles / ${raw.availableOpportunities} opportunités disponibles = ${pct(raw.availableTakes, raw.availableOpportunities)}.`,
+      interpretation: 'Mesure la vraie réactivité : les appels internes ne bloquent pas, les appels clients déjà en cours bloquent.',
+      reason: `${raw.availableTakes} appels pris sur ${raw.availableOpportunities} appels où l’opératrice était disponible.`,
     },
     {
       key: 'abandonsScore',
-      label: 'Abandons imputables',
+      label: 'Abandons pendant disponibilité',
       score: clamp(10 - abandonPressure * 10),
       weight: 0.14,
-      formula: 'Formule : 10 - (abandons imputables / sollicitations × 10).',
-      source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.probes} sollicitations.`,
-      interpretation: 'Pénalise les pertes quand l’opératrice était disponible ou en appel interne pendant l’appel abandonné.',
+      formula: 'Formule : 10 - (abandons imputables / opportunités disponibles × 10).',
+      source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.availableOpportunities} opportunités disponibles.`,
+      interpretation: 'Pénalise les abandons quand l’opératrice était disponible ou seulement en appel interne.',
       reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période.`,
     },
     {
       key: 'attenteScore',
       label: 'Attente moyenne',
       score: lowerIsBetter(raw.waitAvg, teamWait),
-      weight: 0.12,
+      weight: 0.11,
       formula: 'Formule : comparaison de l’attente moyenne opératrice avec la médiane équipe. Plus bas que la médiane = meilleur score.',
       source: `Données : opératrice ${formatClock(raw.waitAvg)} / médiane équipe ${formatClock(teamWait)}.`,
       interpretation: 'Mesure la rapidité de traitement relative à l’équipe, sans comparer directement les volumes horaires.',
@@ -186,7 +217,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'paroleScore',
       label: 'Parole moyenne',
       score: lowerIsBetter(Math.abs(raw.talkAvg - teamTalk), teamTalk || raw.talkAvg || 1),
-      weight: 0.10,
+      weight: 0.09,
       formula: 'Formule : écart entre parole moyenne opératrice et médiane équipe. Plus l’écart est maîtrisé = meilleur score.',
       source: `Données : opératrice ${formatClock(raw.talkAvg)} / médiane équipe ${formatClock(teamTalk)}.`,
       interpretation: 'Valorise une durée de conversation cohérente : ni trop expéditive, ni anormalement longue.',
@@ -196,7 +227,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'parkingScore',
       label: 'Effort parking',
       score: higherIsBetter(parkingEffort, teamParking),
-      weight: 0.15,
+      weight: 0.13,
       formula: 'Formule : ratio appels avec parking / entrants traités, comparé à la médiane équipe. Plus haut = meilleur score.',
       source: `Données : ${raw.handledParking} parking(s) / ${raw.inbound} entrants traités. Médiane équipe : ${Math.round(teamParking * 100)}%.`,
       interpretation: 'Valorise les opératrices qui mettent en parking au lieu de perdre l’appel quand un transfert immédiat n’est pas possible.',
@@ -206,7 +237,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'repriseParkingScore',
       label: 'Reprise après parking',
       score: higherIsBetter(parkingPickupEffort, teamParking),
-      weight: 0.10,
+      weight: 0.09,
       formula: 'Formule : appels repris ou finalisés après parking / entrants traités, comparé à la médiane parking équipe.',
       source: `Données : ${raw.parkingPickup} reprise(s) parking / ${raw.inbound} entrants traités.`,
       interpretation: 'Valorise la récupération utile d’un appel parqué, pas seulement le fait de le mettre en attente.',
@@ -216,7 +247,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'rappelScore',
       label: 'Effort de rappel',
       score: higherIsBetter(callbackEffort, teamCallback),
-      weight: 0.14,
+      weight: 0.12,
       formula: 'Formule : rappels ou sortants utiles / entrants traités, comparé à la médiane équipe.',
       source: `Données : ${raw.callbackOutbounds} rappel(s) utiles / ${raw.inbound} entrants traités. Médiane équipe : ${Math.round(teamCallback * 100)}%.`,
       interpretation: 'Valorise l’effort de rappel car il récupère des opportunités perdues et améliore le service client.',
@@ -226,7 +257,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'sortantsScore',
       label: 'Sortants utiles',
       score: higherIsBetter(outboundEffort, teamOutbound),
-      weight: 0.08,
+      weight: 0.06,
       formula: 'Formule : sortants clients utiles / entrants traités, comparé à la médiane équipe.',
       source: `Données : ${raw.outbound} sortant(s) client >= 20 sec / ${raw.inbound} entrants traités.`,
       interpretation: 'Valorise les appels sortants réels sans surpondérer ce critère.',
@@ -236,7 +267,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       key: 'activiteScore',
       label: 'Activité relative',
       score: higherIsBetter(raw.totalWorkSeconds, teamActivity),
-      weight: 0.09,
+      weight: 0.04,
       formula: 'Formule : temps utile opératrice comparé à la médiane équipe. Poids faible pour limiter l’effet planning.',
       source: `Données : opératrice ${formatClock(raw.totalWorkSeconds)} / médiane équipe ${formatClock(teamActivity)}.`,
       interpretation: 'Tient compte de l’activité réelle, mais ne pénalise pas fortement les plannings courts ou les plages moins chargées.',
@@ -253,6 +284,7 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
     sentimentValue: finalScore,
     sentimentDetail: sentimentExplanation(parts, finalScore),
     sentimentMethod: `Sentiment IA = somme des sous-notes pondérées.\n${parts.map((part) => `${part.label} ${part.score.toFixed(1)} × ${Math.round(part.weight * 100)}%`).join('\n')}\nRésultat : ${finalScore.toFixed(1)}/10.`,
+    availableMissRate: pct(Math.max(0, raw.availableOpportunities - raw.availableTakes), raw.availableOpportunities),
     ...partMap,
     ...methodMap,
   };
@@ -260,9 +292,13 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
 
 export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
   const { takenByOperator, probesByOperator } = buildOperatorAnalysis(calls);
-  const outboundRows = rows.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 20 && row.operator && row.operator !== 'Non identifie');
-  const internalRows = rows.filter((row) => isInternal(row) && isAnswered(row) && row.operator && row.operator !== 'Non identifie');
-  const names = [...new Set([...takenByOperator.keys(), ...probesByOperator.keys(), ...outboundRows.map((row) => row.operator), ...internalRows.map((row) => row.operator)])].sort();
+  const outboundRows = rows.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 20 && isRealOperator(row.operator));
+  const internalRows = rows.filter((row) => isInternal(row) && isAnswered(row) && isRealOperator(row.operator));
+  const names = [...new Set([
+    ...takenByOperator.keys(),
+    ...probesByOperator.keys(),
+    ...rows.map((row) => row.operator).filter(isRealOperator),
+  ])].sort();
 
   const rawData: OperatorRawScore[] = names.map((operator) => {
     const inboundCalls = takenByOperator.get(operator) || [];
@@ -275,12 +311,16 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
     const talkOutbound = outgoing.reduce((sum, row) => sum + row.talking, 0);
     const talkSeconds = talkInbound + talkOutbound;
     const internalSeconds = internals.reduce((sum, row) => sum + row.talking, 0);
+    const opportunities = availableOpportunities(calls, operator, rows);
+    const takes = availableTakes(calls, operator, rows);
 
     return {
       operator,
       inbound: inboundCalls.length,
       outbound: outgoing.length,
       probes,
+      availableOpportunities: opportunities,
+      availableTakes: takes,
       linkedAbandons: linkedAbandons.length,
       handledParking: operatorParkingCount(calls, operator),
       parkingPickup: operatorParkingPickupCount(calls, operator),
@@ -307,8 +347,8 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
       inbound: raw.inbound,
       outbound: raw.outbound,
       total: totalCalls,
-      sondePrise: `${raw.probes} / ${raw.inbound}`,
-      priseRate: pct(raw.inbound, raw.probes),
+      sondePrise: `${raw.availableOpportunities} / ${raw.availableTakes}`,
+      priseRate: pct(raw.availableTakes, raw.availableOpportunities),
       abandons: raw.linkedAbandons,
       parking: raw.handledParking,
       reprisesParking: raw.parkingPickup,
@@ -363,8 +403,8 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
             ['inbound', 'Entrants traites'],
             ['outbound', 'Sortants clients'],
             ['total', 'Total appels'],
-            ['sondePrise', 'Sonde / prise'],
-            ['priseRate', 'Taux prise'],
+            ['sondePrise', 'Dispo / prise'],
+            ['priseRate', 'Taux prise dispo'],
             ['abandons', 'Abandons imputables'],
             ['parking', 'Parking'],
             ['reprisesParking', 'Reprises parking'],
@@ -386,7 +426,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
           columns={[
             ['label', 'Operatrice'],
             ['sentiment', 'Sentiment IA'],
-            ['priseScore', 'Qualite prise'],
+            ['priseScore', 'Prise dispo'],
             ['abandonsScore', 'Abandons'],
             ['attenteScore', 'Attente moy.'],
             ['paroleScore', 'Parole moy.'],
