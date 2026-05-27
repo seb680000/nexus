@@ -28,6 +28,14 @@ type OperatorRawScore = {
   outgoing: Row[];
 };
 
+type ScorePart = {
+  label: string;
+  key: string;
+  score: number;
+  weight: number;
+  reason: string;
+};
+
 function rowEndTime(row: Row) {
   const duration = Math.max(row.talking, row.ringing, 1);
   return (row.time?.getTime() || 0) + duration * 1000;
@@ -104,6 +112,10 @@ function ratioScore(value: number) {
   return clamp(value * 10);
 }
 
+function formatScore(value: number) {
+  return `${clamp(value).toFixed(1)}/10`;
+}
+
 function operatorParkingCount(calls: CallPath[], operator: string) {
   return calls.filter((call) => call.rows.some((row) => row.operator === operator && /parking|shared parking|sp\d+/i.test(`${row.to} ${row.from} ${row.activity}`))).length;
 }
@@ -116,12 +128,12 @@ function operatorCallbackCount(rows: Row[], operator: string) {
   return rows.filter((row) => row.operator === operator && isOutbound(row) && isAnswered(row) && row.talking >= 20).length;
 }
 
-function scoreExplanation(parts: { label: string; score: number; weight: number; reason: string }[], finalScore: number) {
+function sentimentExplanation(parts: ScorePart[], finalScore: number) {
   const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.reason}`);
-  return `Score final : ${finalScore.toFixed(1)}/10\n${lines.join('\n')}`;
+  return `Sentiment IA final : ${finalScore.toFixed(1)}/10\n${lines.join('\n')}`;
 }
 
-function computeScore(raw: OperatorRawScore, team: OperatorRawScore[]) {
+function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const priseRate = raw.probes ? raw.inbound / raw.probes : 0;
   const abandonPressure = raw.probes ? raw.linkedAbandons / raw.probes : raw.linkedAbandons ? 1 : 0;
   const parkingEffort = raw.inbound ? raw.handledParking / raw.inbound : raw.handledParking ? 1 : 0;
@@ -136,56 +148,65 @@ function computeScore(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const teamOutbound = median(team.map((item) => (item.inbound ? item.outbound / item.inbound : 0)));
   const teamActivity = median(team.map((item) => item.totalWorkSeconds).filter(Boolean));
 
-  const parts = [
+  const parts: ScorePart[] = [
     {
+      key: 'priseScore',
       label: 'Qualité de prise',
       score: ratioScore(priseRate),
       weight: 0.18,
       reason: `${raw.inbound} appels pris sur ${raw.probes} sollicitations. Le volume brut ne suffit pas, le taux de prise est utilisé.`,
     },
     {
+      key: 'abandonsScore',
       label: 'Abandons imputables',
       score: clamp(10 - abandonPressure * 10),
       weight: 0.14,
-      reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période. Moins il y en a, meilleure est la note.`,
+      reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période. Moins il y en a, meilleure est l’appréciation.`,
     },
     {
+      key: 'attenteScore',
       label: 'Attente moyenne',
       score: lowerIsBetter(raw.waitAvg, teamWait),
       weight: 0.12,
       reason: `Attente moyenne ${formatClock(raw.waitAvg)} comparée à la médiane équipe ${formatClock(teamWait)}.`,
     },
     {
+      key: 'paroleScore',
       label: 'Parole moyenne',
       score: lowerIsBetter(Math.abs(raw.talkAvg - teamTalk), teamTalk || raw.talkAvg || 1),
       weight: 0.10,
       reason: `Parole moyenne ${formatClock(raw.talkAvg)} comparée à la médiane équipe ${formatClock(teamTalk)}. L’objectif est l’efficacité sans conversation anormalement longue.`,
     },
     {
+      key: 'parkingScore',
       label: 'Effort parking',
       score: higherIsBetter(parkingEffort, teamParking),
       weight: 0.15,
       reason: `${raw.handledParking} appel(s) avec usage parking. Ce critère valorise l’effort de mise en parking quand le traitement immédiat n’est pas possible.`,
     },
     {
+      key: 'repriseParkingScore',
       label: 'Reprise après parking',
       score: higherIsBetter(parkingPickupEffort, teamParking),
       weight: 0.10,
       reason: `${raw.parkingPickup} appel(s) repris ou finalisés après parking. Ce critère valorise la récupération utile d’un appel parqué.`,
     },
     {
+      key: 'rappelScore',
       label: 'Effort de rappel',
       score: higherIsBetter(callbackEffort, teamCallback),
       weight: 0.14,
       reason: `${raw.callbackOutbounds} rappel(s) ou sortant(s) utiles détectés. Les rappels sont valorisés car ils réduisent la perte client.`,
     },
     {
+      key: 'sortantsScore',
       label: 'Sortants utiles',
       score: higherIsBetter(outboundEffort, teamOutbound),
       weight: 0.08,
       reason: `${raw.outbound} appel(s) sortant(s) client de 20 secondes ou plus.`,
     },
     {
+      key: 'activiteScore',
       label: 'Activité relative',
       score: higherIsBetter(raw.totalWorkSeconds, teamActivity),
       weight: 0.09,
@@ -193,10 +214,14 @@ function computeScore(raw: OperatorRawScore, team: OperatorRawScore[]) {
     },
   ];
 
-  const finalScore = parts.reduce((sum, part) => sum + part.score * part.weight, 0);
+  const finalScore = clamp(parts.reduce((sum, part) => sum + part.score * part.weight, 0));
+  const partMap = Object.fromEntries(parts.map((part) => [part.key, formatScore(part.score)]));
+
   return {
-    score: clamp(finalScore).toFixed(1),
-    scoreDetail: scoreExplanation(parts, clamp(finalScore)),
+    sentiment: formatScore(finalScore),
+    sentimentValue: finalScore,
+    sentimentDetail: sentimentExplanation(parts, finalScore),
+    ...partMap,
   };
 }
 
@@ -243,7 +268,6 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
   });
 
   const data = rawData.map((raw) => {
-    const score = computeScore(raw, rawData);
     const totalCalls = raw.inbound + raw.outbound;
     const waitSeconds = raw.inboundCalls.reduce((sum, call) => sum + call.wait, 0);
     const talkInbound = raw.inboundCalls.reduce((sum, call) => sum + call.talk, 0);
@@ -252,8 +276,6 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
 
     return {
       label: raw.operator,
-      score: score.score,
-      scoreDetail: score.scoreDetail,
       inbound: raw.inbound,
       outbound: raw.outbound,
       total: totalCalls,
@@ -271,34 +293,75 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
       work: formatClock(raw.totalWorkSeconds),
       details: raw.details,
     };
-  }).sort((a, b) => Number(b.score) - Number(a.score) || b.total - a.total);
+  }).sort((a, b) => b.total - a.total);
+
+  const sentimentData = rawData.map((raw) => {
+    const sentiment = computeSentiment(raw, rawData);
+    return {
+      label: raw.operator,
+      sentiment: sentiment.sentiment,
+      sentimentValue: sentiment.sentimentValue,
+      priseScore: sentiment.priseScore,
+      abandonsScore: sentiment.abandonsScore,
+      attenteScore: sentiment.attenteScore,
+      paroleScore: sentiment.paroleScore,
+      parkingScore: sentiment.parkingScore,
+      repriseParkingScore: sentiment.repriseParkingScore,
+      rappelScore: sentiment.rappelScore,
+      sortantsScore: sentiment.sortantsScore,
+      activiteScore: sentiment.activiteScore,
+      sentimentDetail: sentiment.sentimentDetail,
+      details: raw.details,
+    };
+  }).sort((a, b) => Number(b.sentimentValue) - Number(a.sentimentValue));
 
   return (
-    <Panel title="Analyse operatrices">
-      <DataTable
-        rows={data}
-        columns={[
-          ['label', 'Operatrice'],
-          ['score', 'Score /10'],
-          ['scoreDetail', 'Detail score NEX'],
-          ['inbound', 'Entrants traites'],
-          ['outbound', 'Sortants clients'],
-          ['total', 'Total appels'],
-          ['sondePrise', 'Sonde / prise'],
-          ['priseRate', 'Taux prise'],
-          ['abandons', 'Abandons imputables'],
-          ['parking', 'Parking'],
-          ['reprisesParking', 'Reprises parking'],
-          ['rappels', 'Rappels utiles'],
-          ['wait', 'Attente totale'],
-          ['waitAvg', 'Attente moy.'],
-          ['talk', 'Parole totale'],
-          ['talkAvg', 'Parole moy.'],
-          ['internal', 'Interne'],
-          ['work', 'Temps total'],
-        ]}
-        onOpen={(row) => setDetail(row.details)}
-      />
-    </Panel>
+    <>
+      <Panel title="Analyse operatrices">
+        <DataTable
+          rows={data}
+          columns={[
+            ['label', 'Operatrice'],
+            ['inbound', 'Entrants traites'],
+            ['outbound', 'Sortants clients'],
+            ['total', 'Total appels'],
+            ['sondePrise', 'Sonde / prise'],
+            ['priseRate', 'Taux prise'],
+            ['abandons', 'Abandons imputables'],
+            ['parking', 'Parking'],
+            ['reprisesParking', 'Reprises parking'],
+            ['rappels', 'Rappels utiles'],
+            ['wait', 'Attente totale'],
+            ['waitAvg', 'Attente moy.'],
+            ['talk', 'Parole totale'],
+            ['talkAvg', 'Parole moy.'],
+            ['internal', 'Interne'],
+            ['work', 'Temps total'],
+          ]}
+          onOpen={(row) => setDetail(row.details)}
+        />
+      </Panel>
+
+      <Panel title="Sentiment IA operatrices">
+        <DataTable
+          rows={sentimentData}
+          columns={[
+            ['label', 'Operatrice'],
+            ['sentiment', 'Sentiment IA'],
+            ['priseScore', 'Qualite prise'],
+            ['abandonsScore', 'Abandons'],
+            ['attenteScore', 'Attente moy.'],
+            ['paroleScore', 'Parole moy.'],
+            ['parkingScore', 'Effort parking'],
+            ['repriseParkingScore', 'Reprise parking'],
+            ['rappelScore', 'Effort rappel'],
+            ['sortantsScore', 'Sortants utiles'],
+            ['activiteScore', 'Activite relative'],
+            ['sentimentDetail', 'Explication NEX'],
+          ]}
+          onOpen={(row) => setDetail(row.details)}
+        />
+      </Panel>
+    </>
   );
 }
