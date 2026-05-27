@@ -1,4 +1,4 @@
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, LabelList, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CallPath, ChartMetric, DetailItem, Row, ViewKey } from '../types';
 import { callDetails, outboundDetails, totalDays, dateRangeLabel } from '../utils/calls';
 import { frDate } from '../utils/dates';
@@ -43,15 +43,33 @@ export function formatChartValue(value: unknown, metric: ChartMetric) {
   return `${minutes}m${String(seconds).padStart(2, '0')}`;
 }
 
+export function chartLabelFormatter(value: unknown, metric: ChartMetric) {
+  return formatChartValue(value, metric);
+}
+
 export function NexChartTooltip({ active, payload, label, metricLabel, metric }: any) {
   if (!active || !payload?.length) return null;
   const value = payload[0]?.value;
+  const data = payload[0]?.payload || {};
+  const operators = Array.isArray(data.operatorSummary) ? data.operatorSummary : [];
 
   return (
-    <div className="nexTooltip">
+    <div className="nexTooltip wideTooltip">
       <strong>NEX · {label}</strong>
       <b>{metricLabel} : {formatChartValue(value, metric)}</b>
       <p>{nexMetricHelp(metricLabel)}</p>
+      <div className="tooltipTotals">
+        <span>Entrants traités : {data.treatedCount || 0}</span>
+        <span>Sortants : {data.outboundCount || 0}</span>
+      </div>
+      {operators.length > 0 && (
+        <div className="tooltipOperators">
+          {operators.map((line: string) => (
+            <small key={line}>{line}</small>
+          ))}
+        </div>
+      )}
+      <em>Cliquer sur le point pour ouvrir le détail des appels.</em>
     </div>
   );
 }
@@ -76,15 +94,22 @@ type DashboardStats = {
   answerRate: number;
 };
 
+type ChartPoint = Record<string, any>;
+
 type DashboardViewProps = {
   stats: DashboardStats;
   rows: Row[];
-  chartData: Array<Record<string, string | number>>;
+  chartData: ChartPoint[];
   chartMetric: ChartMetric;
   setChartMetric: (metric: ChartMetric) => void;
   setDetail: (rows: DetailItem[]) => void;
   setActiveView: (view: ViewKey) => void;
 };
+
+export function openChartDetails(data: any, setDetail: (rows: DetailItem[]) => void) {
+  const rows = Array.isArray(data?.detailRows) ? data.detailRows : [];
+  if (rows.length) setDetail(rows);
+}
 
 export function DashboardView({ stats, rows, chartData, chartMetric, setChartMetric, setDetail, setActiveView }: DashboardViewProps) {
   const selectedMetric = chartMetricOptions.find((option) => option.key === chartMetric)?.label || 'Total a facturer';
@@ -149,13 +174,15 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
           </label>
         </section>
 
-        <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={chartData}>
+        <ResponsiveContainer width="100%" height={360}>
+          <LineChart data={chartData} onClick={(event: any) => openChartDetails(event?.activePayload?.[0]?.payload, setDetail)}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" />
             <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
             <Tooltip content={<NexChartTooltip metricLabel={selectedMetric} metric={chartMetric} />} />
-            <Line type="linear" dataKey="value" name={selectedMetric} dot={{ r: 4 }} activeDot={{ r: 7 }} />
+            <Line type="linear" dataKey="value" name={selectedMetric} dot={{ r: 5 }} activeDot={{ r: 8 }} className="clickableChart">
+              <LabelList dataKey="value" position="top" formatter={(value: unknown) => chartLabelFormatter(value, chartMetric)} />
+            </Line>
           </LineChart>
         </ResponsiveContainer>
       </Panel>
