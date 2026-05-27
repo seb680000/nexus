@@ -75,7 +75,6 @@ function operatorBusyDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
   const start = call.date.getTime();
   const end = start + Math.max(call.wait, 1) * 1000;
-
   return rows.some((row) => {
     if (!row.time || row.operator !== operator) return false;
     if (!isClientBlockingCall(row)) return false;
@@ -87,7 +86,6 @@ function operatorInternalDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
   const start = call.date.getTime();
   const end = start + Math.max(call.wait, 1) * 1000;
-
   return rows.some((row) => row.time && row.operator === operator && isInternal(row) && rangesOverlap(start, end, row.time.getTime(), rowEndTime(row)));
 }
 
@@ -173,7 +171,6 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const parkingPickupEffort = raw.inbound ? raw.parkingPickup / raw.inbound : raw.parkingPickup ? 1 : 0;
   const callbackEffort = raw.inbound ? raw.callbackOutbounds / raw.inbound : raw.callbackOutbounds ? 1 : 0;
   const outboundEffort = raw.inbound ? raw.outbound / raw.inbound : raw.outbound ? 1 : 0;
-
   const teamWait = median(team.map((item) => item.waitAvg).filter(Boolean));
   const teamTalk = median(team.map((item) => item.talkAvg).filter(Boolean));
   const teamParking = median(team.map((item) => (item.inbound ? item.handledParking / item.inbound : 0)));
@@ -364,23 +361,31 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
       sentiment: sentiment.sentiment,
       sentimentValue: sentiment.sentimentValue,
       sentimentMethod: sentiment.sentimentMethod,
+      priseStats: `${raw.availableTakes} / ${raw.availableOpportunities} (${pct(raw.availableTakes, raw.availableOpportunities)})`,
       priseScore: sentiment.priseScore,
       priseScoreMethod: sentiment.priseScoreMethod,
+      abandonStats: `${raw.linkedAbandons} (${pct(raw.linkedAbandons, raw.availableOpportunities)})`,
       abandonsScore: sentiment.abandonsScore,
       abandonsScoreMethod: sentiment.abandonsScoreMethod,
+      attenteStats: formatClock(raw.waitAvg),
       attenteScore: sentiment.attenteScore,
       attenteScoreMethod: sentiment.attenteScoreMethod,
+      paroleStats: formatClock(raw.talkAvg),
       paroleScore: sentiment.paroleScore,
       paroleScoreMethod: sentiment.paroleScoreMethod,
+      parkingStats: `${raw.handledParking} (${pct(raw.handledParking, raw.inbound)})`,
       parkingScore: sentiment.parkingScore,
       parkingScoreMethod: sentiment.parkingScoreMethod,
-      repriseParkingCount: raw.parkingPickup,
+      repriseParkingStats: raw.parkingPickup,
       repriseParkingScore: sentiment.repriseParkingScore,
       repriseParkingScoreMethod: sentiment.repriseParkingScoreMethod,
+      rappelStats: `${raw.callbackOutbounds} (${pct(raw.callbackOutbounds, raw.inbound)})`,
       rappelScore: sentiment.rappelScore,
       rappelScoreMethod: sentiment.rappelScoreMethod,
+      sortantsStats: raw.outbound,
       sortantsScore: sentiment.sortantsScore,
       sortantsScoreMethod: sentiment.sortantsScoreMethod,
+      activiteStats: formatClock(raw.totalWorkSeconds),
       activiteScore: sentiment.activiteScore,
       activiteScoreMethod: sentiment.activiteScoreMethod,
       sentimentDetail: sentiment.sentimentDetail,
@@ -421,15 +426,15 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
           columns={[
             ['label', 'Operatrice'],
             ['sentiment', 'Sentiment IA'],
-            ['priseScore', 'Prise dispo'],
-            ['abandonsScore', 'Abandons'],
-            ['attenteScore', 'Attente moy.'],
-            ['paroleScore', 'Parole moy.'],
-            ['parkingScore', 'Effort parking'],
-            ['repriseParkingCount', 'Reprise parking'],
-            ['rappelScore', 'Effort rappel'],
-            ['sortantsScore', 'Sortants utiles'],
-            ['activiteScore', 'Activite relative'],
+            ['priseStats', 'Prise dispo'],
+            ['abandonStats', 'Abandons'],
+            ['attenteStats', 'Attente moy.'],
+            ['paroleStats', 'Parole moy.'],
+            ['parkingStats', 'Effort parking'],
+            ['repriseParkingStats', 'Reprise parking'],
+            ['rappelStats', 'Effort rappel'],
+            ['sortantsStats', 'Sortants utiles'],
+            ['activiteStats', 'Activite relative'],
             ['sentimentDetail', 'Explication NEX'],
           ]}
           onOpen={(row) => setDetail(row.details)}
