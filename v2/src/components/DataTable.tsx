@@ -109,6 +109,35 @@ function valueTone(value: unknown, stat?: { avg: number; sd: number }) {
   return 'valueNeutral';
 }
 
+function isHandledAbandon(row: any) {
+  const operatorCallback = normalize(String(row.operatorCallback || ''));
+  const userCallback = normalize(String(row.userCallback || ''));
+  return !operatorCallback.includes('aucun rappel operatrice trouve') || !userCallback.includes('aucun rappel entrant ulterieur detecte');
+}
+
+function abandonedWaitTone(row: any) {
+  const seconds = Number(row.waitSec || parseComparableNumber(row.wait) || 0);
+  if (seconds >= 60) return 'valueCritical';
+  if (seconds >= 30) return 'valueBad';
+  if (seconds >= 15) return 'valueNeutral';
+  return 'valueGood';
+}
+
+function missedDayTone(row: any) {
+  if (isHandledAbandon(row)) return 'valueGood';
+  const count = Number(row.missedDay || 0);
+  if (count >= 3) return 'valueBad';
+  if (count === 2) return 'valueNeutral';
+  return 'valueGood';
+}
+
+function customTone(key: string, label: string, row: any) {
+  const normalizedLabel = normalize(label);
+  if (key === 'wait' && normalizedLabel.includes('attente') && 'waitSec' in row) return abandonedWaitTone(row);
+  if (key === 'missedDay') return missedDayTone(row);
+  return '';
+}
+
 export function DataTable({ rows, columns, onOpen }: DataTableProps) {
   const [nexCell, setNexCell] = useState<NexCell>(null);
   const columnStats = useMemo(() => buildColumnStats(rows, columns), [rows, columns]);
@@ -129,7 +158,7 @@ export function DataTable({ rows, columns, onOpen }: DataTableProps) {
             {rows.map((row, index) => (
               <tr key={index}>
                 {columns.map(([key, label]) => {
-                  const tone = valueTone(row[key], columnStats.get(key));
+                  const tone = customTone(key, label, row) || valueTone(row[key], columnStats.get(key));
                   return (
                     <td
                       key={key}
