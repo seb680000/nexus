@@ -38,20 +38,56 @@ function isUsefulInternal(row: any) {
   return text.includes('supervision') || text.includes('formation') || text.includes('assistance') || text.includes('transfert');
 }
 
+function isBlockingCall(row: any) {
+  if (isInternal(row) && !isUsefulInternal(row)) return false;
+  if (!(isInbound(row) || isOutbound(row) || isInternal(row))) return false;
+  if (!isAnswered(row) || row.talking <= 0) return false;
+  return true;
+}
+
 function operatorOnLineAt(operator: string, at: Date | null, businessRows: any[]) {
   if (!at) return false;
   const timestamp = at.getTime();
   return businessRows.some((row) => {
     if (!row.time || row.operator !== operator) return false;
-    if (isInternal(row) && !isUsefulInternal(row)) return false;
-    if (!(isInbound(row) || isOutbound(row) || isInternal(row)) || !isAnswered(row) || row.talking <= 0) return false;
+    if (!isBlockingCall(row)) return false;
     return row.time.getTime() <= timestamp && rowEndTime(row) >= timestamp;
   });
 }
 
+function lastBlockingEndBefore(operator: string, at: Date | null, businessRows: any[]) {
+  if (!at) return null;
+  const timestamp = at.getTime();
+  const lastEnd = businessRows
+    .filter((row) => row.time && row.operator === operator && isBlockingCall(row))
+    .map(rowEndTime)
+    .filter((endTime) => endTime <= timestamp)
+    .sort((a, b) => b - a)[0];
+
+  return lastEnd || null;
+}
+
+function formatAvailableSince(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m${String(remainingSeconds).padStart(2, '0')}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h${String(remainingMinutes).padStart(2, '0')}`;
+}
+
 function availableOperator(call: CallPath, businessRows: any[]) {
   const operators = [...new Set(businessRows.map((row) => row.operator).filter(isRealOperator))].sort();
-  const available = operators.filter((operator) => !operatorOnLineAt(operator, call.date, businessRows));
+  const at = call.date?.getTime() || 0;
+  const available = operators
+    .filter((operator) => !operatorOnLineAt(operator, call.date, businessRows))
+    .map((operator) => {
+      const lastEnd = lastBlockingEndBefore(operator, call.date, businessRows);
+      const availableSeconds = lastEnd ? Math.max(0, Math.round((at - lastEnd) / 1000)) : 0;
+      return `${operator} · dispo depuis ${lastEnd ? formatAvailableSince(availableSeconds) : 'début période'}`;
+    });
+
   return available.join(', ') || 'Aucune disponible détectée';
 }
 
