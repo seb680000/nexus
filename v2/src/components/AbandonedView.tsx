@@ -24,6 +24,27 @@ type AbandonedViewProps = {
   onOpen: (row: AbandonedReportRow) => void;
 };
 
+function dayFromDateLabel(value: string) {
+  return String(value || '').slice(0, 8);
+}
+
+function buildMissedDayRows(rows: AbandonedReportRow[]) {
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = `${dayFromDateLabel(row.date)}__${row.label}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  return rows.map((row) => {
+    const key = `${dayFromDateLabel(row.date)}__${row.label}`;
+    return {
+      ...row,
+      missedDay: counts.get(key) || 1,
+    };
+  });
+}
+
 export function AbandonedView({
   rows,
   counts,
@@ -35,6 +56,8 @@ export function AbandonedView({
   setStatus,
   onOpen,
 }: AbandonedViewProps) {
+  const displayRows = buildMissedDayRows(rows);
+
   return (
     <Panel title="Appels abandonnes">
       <section className="filters">
@@ -76,16 +99,17 @@ export function AbandonedView({
           Total {counts.total} · Premium {counts.premium} · Forfait {counts.forfait} · Autres {counts.autre} · &gt;5s {counts.plus5} · &gt;10s {counts.plus10} · &gt;30s {counts.plus30} · &gt;60s {counts.plus60}
         </div>
 
-        <button onClick={() => exportAbandonedPdf(rows)}>Export PDF</button>
-        <button onClick={() => exportAbandonedCsv(rows)}>Export Excel</button>
+        <button onClick={() => exportAbandonedPdf(displayRows)}>Export PDF</button>
+        <button onClick={() => exportAbandonedCsv(displayRows)}>Export Excel</button>
       </section>
 
       <DataTable
-        rows={rows}
+        rows={displayRows}
         columns={[
           ['status', 'Statut'],
           ['date', 'Date / heure appel'],
           ['label', 'Client'],
+          ['missedDay', 'Appels manqués jour'],
           ['phone', 'Telephone'],
           ['service', 'Famille'],
           ['wait', 'Attente'],
