@@ -5,7 +5,7 @@ import { frenchStatus, frenchStep } from './labels';
 
 export const OUTBOUND_MIN_TALK_SECONDS = 20;
 
-const excludedOperatorNames = ['sebastien schmitt', 'sébastien schmitt'];
+const excludedOperatorNames = ['sebastien schmitt', 'sébastien schmitt', 'domaine la clairiere', 'domaine la clairière'];
 
 const blockedNames = [
   'support',
@@ -20,6 +20,8 @@ const blockedNames = [
   'queue',
   'shared parking',
   'parking',
+  'domaine la clairiere',
+  'domaine la clairière',
 ];
 
 export function normalizeName(value: string) {
