@@ -16,6 +16,8 @@ const blockedNames = [
   'client premium',
   'client forfait',
   'queue',
+  'shared parking',
+  'parking',
 ];
 
 export function isQueue(row: Row) {
@@ -198,7 +200,7 @@ function usefulHumanRowsAfterParking(sorted: Row[]) {
   });
 
   const parkingPickup = sorted
-    .filter(isParking)
+    .filter((row) => isParking(row) && /call was taken by/i.test(row.activity))
     .map((row) => {
       const operator = operatorFromActivity(row.activity);
       return operator ? { ...row, operator } : null;
