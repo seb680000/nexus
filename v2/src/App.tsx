@@ -29,6 +29,7 @@ import {
   isOperatorProbe,
   isOutbound,
   mapRows,
+  outboundDetails,
   statusForAbandon,
   summarize,
 } from './utils/calls';
@@ -67,19 +68,13 @@ function rowEndTime(row: Row) {
 
 function operatorWasInternalDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
-
   const callStart = call.date.getTime();
   const callEnd = callStart + Math.max(call.wait, 1) * 1000;
-
-  return rows.some((row) => {
-    if (!row.time || row.operator !== operator || !isInternal(row)) return false;
-    return rangesOverlap(callStart, callEnd, row.time.getTime(), rowEndTime(row));
-  });
+  return rows.some((row) => row.time && row.operator === operator && isInternal(row) && rangesOverlap(callStart, callEnd, row.time.getTime(), rowEndTime(row)));
 }
 
 function operatorWasBusyWithClientDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
-
   const callStart = call.date.getTime();
   const callEnd = callStart + Math.max(call.wait, 1) * 1000;
 
@@ -87,7 +82,6 @@ function operatorWasBusyWithClientDuring(call: CallPath, operator: string, rows:
     if (!row.time || row.operator !== operator) return false;
     if (isInternal(row)) return false;
     if (!(isInbound(row) || isOutbound(row)) || !isAnswered(row) || row.talking <= 0) return false;
-
     return rangesOverlap(callStart, callEnd, row.time.getTime(), rowEndTime(row));
   });
 }
@@ -110,11 +104,7 @@ function callHasSelectedOperator(call: CallPath, selectedOperators: string[], ro
     );
   }
 
-  return (
-    selectedOperators.includes(call.operator) ||
-    call.rows.some((row) => selectedOperators.includes(row.operator)) ||
-    call.rows.some((row) => isOperatorProbe(row) && selectedOperators.includes(row.operator))
-  );
+  return selectedOperators.includes(call.operator) || call.rows.some((row) => selectedOperators.includes(row.operator)) || call.rows.some((row) => isOperatorProbe(row) && selectedOperators.includes(row.operator));
 }
 
 function rowHasSelectedOperator(row: Row, selectedOperators: string[]) {
@@ -124,7 +114,6 @@ function rowHasSelectedOperator(row: Row, selectedOperators: string[]) {
 
 function abandonedStatusMatches(row: AbandonedReportRow, status: AbandonedStatusFilter) {
   const value = String(row.status || '').toLowerCase();
-
   if (status === 'all') return true;
   if (status === 'toCall') return value.includes('à rappeler') || value.includes('a rappeler');
   if (status === 'operatorDone') return value === 'traité' || value === 'traite' || value.includes('traité opératrice') || value.includes('traite operatrice');
@@ -132,13 +121,11 @@ function abandonedStatusMatches(row: AbandonedReportRow, status: AbandonedStatus
   if (status === 'under5') return value.includes('moins de 5');
   if (status === 'lostParking') return value.includes('perdu pendant parking');
   if (status === 'treatedAfterParking') return value.includes('traité après perte parking') || value.includes('traite apres perte parking');
-
   return true;
 }
 
 function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, customStart: string, customEnd: string) {
   if (!date || !anchor) return false;
-
   if (mode === 'custom') {
     const start = customStart ? new Date(customStart) : new Date(anchor);
     const end = customEnd ? new Date(customEnd) : new Date(anchor);
@@ -146,29 +133,19 @@ function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, 
     end.setHours(23, 0, 0, 0);
     return date >= start && date <= end;
   }
-
   if (mode === 'day') return dayKey(date) === dayKey(anchor);
-
   if (mode === 'week') {
     const start = startOfWeek(anchor);
     const end = addDays(start, 7);
     return date >= start && date < end;
   }
-
-  if (mode === 'month') {
-    return date.getFullYear() === anchor.getFullYear() && date.getMonth() === anchor.getMonth();
-  }
-
-  if (mode === 'quarter') {
-    return date.getFullYear() === anchor.getFullYear() && Math.floor(date.getMonth() / 3) === Math.floor(anchor.getMonth() / 3);
-  }
-
+  if (mode === 'month') return date.getFullYear() === anchor.getFullYear() && date.getMonth() === anchor.getMonth();
+  if (mode === 'quarter') return date.getFullYear() === anchor.getFullYear() && Math.floor(date.getMonth() / 3) === Math.floor(anchor.getMonth() / 3);
   return date.getFullYear() === anchor.getFullYear();
 }
 
 function metricValue(calls: CallPath[], rows: Row[], metric: ChartMetric, callbackSettings: { families: Service[]; minAbandon: number; minCallback: number; minUserCallback: number }) {
   const summary = summarize(calls, rows, callbackSettings);
-
   if (metric === 'invoiceTotal') return summary.invoiceTotal;
   if (metric === 'treated') return summary.treated.length;
   if (metric === 'abandoned') return summary.abandoned.length;
@@ -180,14 +157,32 @@ function metricValue(calls: CallPath[], rows: Row[], metric: ChartMetric, callba
   if (metric === 'maxWait') return summary.maxWait;
   if (metric === 'avgAbandonedWait') return Math.round(summary.avgAbandonedWait);
   if (metric === 'avgTalk') return Math.round(summary.avgTalk);
-
   return summary.invoiceTotal;
 }
 
+function operatorSummary(calls: CallPath[], rows: Row[]) {
+  const names = [...new Set([...calls.map((call) => call.operator), ...rows.map((row) => row.operator)])].filter((name) => name && name !== 'Non identifie').sort();
+
+  return names.map((name) => {
+    const incoming = calls.filter((call) => call.treated && call.operator === name).length;
+    const outgoing = rows.filter((row) => row.operator === name && isOutbound(row) && isAnswered(row) && row.talking >= 20).length;
+    return `${name} : entrants ${incoming} · sortants ${outgoing}`;
+  });
+}
+
+function detailRowsForPoint(calls: CallPath[], rows: Row[]) {
+  return [...callDetails(calls), ...outboundDetails(rows)];
+}
+
 function buildMetricBucket(label: string, calls: CallPath[], rows: Row[], metric: ChartMetric, callbackSettings: { families: Service[]; minAbandon: number; minCallback: number; minUserCallback: number }) {
+  const summary = summarize(calls, rows, callbackSettings);
   return {
     month: label,
     value: metricValue(calls, rows, metric, callbackSettings),
+    treatedCount: summary.treated.length,
+    outboundCount: summary.outbound,
+    operatorSummary: operatorSummary(calls, rows),
+    detailRows: detailRowsForPoint(calls, rows),
   };
 }
 
@@ -199,14 +194,11 @@ function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor
     const datedRows = rows.filter((row) => row.time).sort((a, b) => a.time!.getTime() - b.time!.getTime());
     const firstTime = datedCalls[0]?.date || datedRows[0]?.time;
     const lastTime = datedCalls[datedCalls.length - 1]?.date || datedRows[datedRows.length - 1]?.time;
-
     if (!firstTime || !lastTime) return [];
-
     const firstHour = firstTime.getHours();
     const lastHour = lastTime.getHours();
     const callsByHour = groupBy(datedCalls, (call) => `${pad(call.date!.getHours())}h`);
     const rowsByHour = groupBy(datedRows, (row) => `${pad(row.time!.getHours())}h`);
-
     return Array.from({ length: lastHour - firstHour + 1 }, (_, index) => {
       const label = `${pad(firstHour + index)}h`;
       return buildMetricBucket(label, callsByHour.get(label) || [], rowsByHour.get(label) || [], metric, callbackSettings);
@@ -217,7 +209,6 @@ function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor
     const start = startOfWeek(anchor);
     const callsByDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
     const rowsByDay = groupBy(rows, (row) => (row.time ? frShortDate(row.time) : 'inconnu'));
-
     return Array.from({ length: 7 }, (_, index) => {
       const date = addDays(start, index);
       const label = frShortDate(date);
@@ -230,7 +221,6 @@ function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor
     const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
     const callsByDay = groupBy(calls, (call) => (call.date ? frShortDate(call.date) : 'inconnu'));
     const rowsByDay = groupBy(rows, (row) => (row.time ? frShortDate(row.time) : 'inconnu'));
-
     return Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(firstDay);
       date.setDate(index + 1);
@@ -243,7 +233,6 @@ function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor
     const quarterStartMonth = Math.floor(anchor.getMonth() / 3) * 3;
     const callsByMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
     const rowsByMonth = groupBy(rows, (row) => (row.time ? monthLabel(row.time) : 'inconnu'));
-
     return Array.from({ length: 3 }, (_, index) => {
       const date = new Date(anchor.getFullYear(), quarterStartMonth + index, 1);
       const label = monthLabel(date);
@@ -253,7 +242,6 @@ function buildChartData(calls: CallPath[], rows: Row[], mode: PeriodMode, anchor
 
   const callsByMonth = groupBy(calls, (call) => (call.date ? monthLabel(call.date) : 'inconnu'));
   const rowsByMonth = groupBy(rows, (row) => (row.time ? monthLabel(row.time) : 'inconnu'));
-
   return Array.from({ length: 12 }, (_, index) => {
     const date = new Date(anchor.getFullYear(), index, 1);
     const label = monthLabel(date);
@@ -271,23 +259,7 @@ function App() {
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
   const [settingsSection, setSettingsSection] = useState<ViewKey>('abandoned');
   const [chartMetric, setChartMetric] = useState<ChartMetric>('invoiceTotal');
-
-  const [users, setUsers] = useState<UserRow[]>([
-    {
-      id: 1,
-      email: 'sebastien.schmitt57@gmail.com',
-      name: 'Sebastien Schmitt',
-      role: 'superadmin',
-      status: 'active',
-      dashboard: true,
-      monthly: true,
-      clients: true,
-      operators: true,
-      abandoned: true,
-      settings: true,
-    },
-  ]);
-
+  const [users, setUsers] = useState<UserRow[]>([{ id: 1, email: 'sebastien.schmitt57@gmail.com', name: 'Sebastien Schmitt', role: 'superadmin', status: 'active', dashboard: true, monthly: true, clients: true, operators: true, abandoned: true, settings: true }]);
   const [newEmail, setNewEmail] = useState('');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -300,162 +272,42 @@ function App() {
   const [minUserCallback, setMinUserCallback] = useState(10);
 
   const allCalls = useMemo(() => buildCalls(rows), [rows]);
-
-  const anchor = useMemo(
-    () => allCalls.map((call) => call.date).filter(Boolean).sort((a, b) => b!.getTime() - a!.getTime())[0] || null,
-    [allCalls]
-  );
-
+  const anchor = useMemo(() => allCalls.map((call) => call.date).filter(Boolean).sort((a, b) => b!.getTime() - a!.getTime())[0] || null, [allCalls]);
   const defaultDay = anchor ? dayKey(anchor) : '';
   const effectiveStart = customStart || defaultDay;
   const effectiveEnd = customEnd || defaultDay;
-
-  const periodCalls = useMemo(
-    () => allCalls.filter((call) => periodFilter(call.date, periodMode, anchor, effectiveStart, effectiveEnd)),
-    [allCalls, periodMode, anchor, effectiveStart, effectiveEnd]
-  );
-
-  const periodRows = useMemo(
-    () => rows.filter((row) => periodFilter(row.time, periodMode, anchor, effectiveStart, effectiveEnd)),
-    [rows, periodMode, anchor, effectiveStart, effectiveEnd]
-  );
-
-  const familyCalls = useMemo(
-    () => periodCalls.filter((call) => family === 'all' || call.service === family),
-    [periodCalls, family]
-  );
-
-  const familyRows = useMemo(
-    () => periodRows.filter((row) => family === 'all' || familyCalls.some((call) => call.callId === row.callId)),
-    [periodRows, family, familyCalls]
-  );
-
-  const clients = useMemo(
-    () => [...new Set(familyCalls.map((call) => call.client))].filter(isClientName).sort(),
-    [familyCalls]
-  );
-
-  const operators = useMemo(
-    () =>
-      [...new Set(familyCalls.flatMap((call) => call.rows.map((row) => row.operator).concat(call.operator)))]
-        .filter((operator) => operator && operator !== 'Non identifie')
-        .sort(),
-    [familyCalls]
-  );
-
-  const filteredCalls = useMemo(
-    () =>
-      familyCalls.filter(
-        (call) =>
-          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators, familyRows)
-      ),
-    [familyCalls, familyRows, client, selectedOperators]
-  );
-
-  const filteredRows = useMemo(
-    () =>
-      familyRows.filter(
-        (row) =>
-          (client === 'all' || row.client === client) && rowHasSelectedOperator(row, selectedOperators)
-      ),
-    [familyRows, client, selectedOperators]
-  );
-
-  const callbackSettings = useMemo(
-    () => ({ families: callbackFamilies, minAbandon, minCallback, minUserCallback }),
-    [callbackFamilies, minAbandon, minCallback, minUserCallback]
-  );
-
+  const periodCalls = useMemo(() => allCalls.filter((call) => periodFilter(call.date, periodMode, anchor, effectiveStart, effectiveEnd)), [allCalls, periodMode, anchor, effectiveStart, effectiveEnd]);
+  const periodRows = useMemo(() => rows.filter((row) => periodFilter(row.time, periodMode, anchor, effectiveStart, effectiveEnd)), [rows, periodMode, anchor, effectiveStart, effectiveEnd]);
+  const familyCalls = useMemo(() => periodCalls.filter((call) => family === 'all' || call.service === family), [periodCalls, family]);
+  const familyRows = useMemo(() => periodRows.filter((row) => family === 'all' || familyCalls.some((call) => call.callId === row.callId)), [periodRows, family, familyCalls]);
+  const clients = useMemo(() => [...new Set(familyCalls.map((call) => call.client))].filter(isClientName).sort(), [familyCalls]);
+  const operators = useMemo(() => [...new Set(familyCalls.flatMap((call) => call.rows.map((row) => row.operator).concat(call.operator)))].filter((operator) => operator && operator !== 'Non identifie').sort(), [familyCalls]);
+  const filteredCalls = useMemo(() => familyCalls.filter((call) => (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators, familyRows)), [familyCalls, familyRows, client, selectedOperators]);
+  const filteredRows = useMemo(() => familyRows.filter((row) => (client === 'all' || row.client === client) && rowHasSelectedOperator(row, selectedOperators)), [familyRows, client, selectedOperators]);
+  const callbackSettings = useMemo(() => ({ families: callbackFamilies, minAbandon, minCallback, minUserCallback }), [callbackFamilies, minAbandon, minCallback, minUserCallback]);
   const stats = useMemo(() => summarize(filteredCalls, filteredRows, callbackSettings), [filteredCalls, filteredRows, callbackSettings]);
   const chartData = useMemo(() => buildChartData(filteredCalls, filteredRows, periodMode, anchor, chartMetric, callbackSettings), [filteredCalls, filteredRows, periodMode, anchor, chartMetric, callbackSettings]);
 
-  const byClient = useMemo(
-    () =>
-      [...groupBy(filteredCalls.filter((call) => isClientName(call.client)), (call) => call.client).entries()]
-        .map(([label, list]) => ({
-          label,
-          total: list.length,
-          treated: list.filter((call) => call.treated).length,
-          abandoned: list.filter((call) => call.abandoned).length,
-          wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)),
-          talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)),
-          details: callDetails(list),
-        }))
-        .sort((a, b) => b.total - a.total),
-    [filteredCalls]
-  );
+  const byClient = useMemo(() => [...groupBy(filteredCalls.filter((call) => isClientName(call.client)), (call) => call.client).entries()].map(([label, list]) => ({ label, total: list.length, treated: list.filter((call) => call.treated).length, abandoned: list.filter((call) => call.abandoned).length, wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)), talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)), details: callDetails(list) })).sort((a, b) => b.total - a.total), [filteredCalls]);
 
   const byOperator = useMemo(() => {
     const { takenByOperator, probesByOperator } = buildOperatorAnalysis(filteredCalls);
     const names = [...new Set([...takenByOperator.keys(), ...probesByOperator.keys()])].sort();
-
-    return names
-      .map((label) => {
-        const list = takenByOperator.get(label) || [];
-        const probes = probesByOperator.get(label)?.size || 0;
-
-        return {
-          label,
-          total: list.length,
-          sondePrise: `${probes} / ${list.length}`,
-          wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)),
-          talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)),
-          avg: list.length ? formatClock(list.reduce((sum, call) => sum + call.talk, 0) / list.length) : '00:00:00',
-          details: callDetails(list),
-        };
-      })
-      .sort((a, b) => b.total - a.total);
+    return names.map((label) => {
+      const list = takenByOperator.get(label) || [];
+      const probes = probesByOperator.get(label)?.size || 0;
+      return { label, total: list.length, sondePrise: `${probes} / ${list.length}`, wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)), talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)), avg: list.length ? formatClock(list.reduce((sum, call) => sum + call.talk, 0) / list.length) : '00:00:00', details: callDetails(list) };
+    }).sort((a, b) => b.total - a.total);
   }, [filteredCalls]);
 
-  const abandonedBase = useMemo(
-    () => stats.abandoned.filter((call) => (abandonedFamily === 'all' || call.service === abandonedFamily) && isDurationMatch(call.wait, abandonedDuration)),
-    [stats.abandoned, abandonedFamily, abandonedDuration]
-  );
-
-  const abandonedRowsAll = useMemo(
-    (): AbandonedReportRow[] =>
-      abandonedBase.map((call) => {
-        const operatorCallback = stats.operatorCallbacks.get(call.callId) || null;
-        const userCallback = stats.userCallbacks.get(call.callId) || null;
-
-        return {
-          date: frDateHour(call.date),
-          label: call.client,
-          phone: call.phone,
-          service: call.service,
-          wait: formatClock(call.wait),
-          waitSec: call.wait,
-          status: statusForAbandon(call, operatorCallback, userCallback),
-          operatorCallback: operatorCallback
-            ? `${operatorCallback.operator} · rappel à ${frTime(operatorCallback.time)} · durée ${formatDuration(operatorCallback.duration)}`
-            : 'Aucun rappel operatrice trouve',
-          userCallback: userCallback
-            ? `Utilisateur a deja rappele · ${frTime(userCallback.time)} · entrant decroche · pris par ${userCallback.operator} · durée ${formatDuration(userCallback.duration)}`
-            : 'Aucun rappel entrant ulterieur detecte',
-          details: callDetails([call]),
-        };
-      }),
-    [abandonedBase, stats.operatorCallbacks, stats.userCallbacks]
-  );
-
-  const abandonedRows = useMemo(
-    () => abandonedRowsAll.filter((row) => abandonedStatusMatches(row, abandonedStatus)),
-    [abandonedRowsAll, abandonedStatus]
-  );
-
-  const abandonedCounts = useMemo(
-    () => ({
-      total: abandonedRows.length,
-      premium: abandonedRows.filter((row) => row.service === 'premium').length,
-      forfait: abandonedRows.filter((row) => row.service === 'forfait').length,
-      autre: abandonedRows.filter((row) => row.service === 'autre').length,
-      plus5: abandonedRows.filter((row) => row.waitSec > 5).length,
-      plus10: abandonedRows.filter((row) => row.waitSec > 10).length,
-      plus30: abandonedRows.filter((row) => row.waitSec > 30).length,
-      plus60: abandonedRows.filter((row) => row.waitSec > 60).length,
-    }),
-    [abandonedRows]
-  );
+  const abandonedBase = useMemo(() => stats.abandoned.filter((call) => (abandonedFamily === 'all' || call.service === abandonedFamily) && isDurationMatch(call.wait, abandonedDuration)), [stats.abandoned, abandonedFamily, abandonedDuration]);
+  const abandonedRowsAll = useMemo((): AbandonedReportRow[] => abandonedBase.map((call) => {
+    const operatorCallback = stats.operatorCallbacks.get(call.callId) || null;
+    const userCallback = stats.userCallbacks.get(call.callId) || null;
+    return { date: frDateHour(call.date), label: call.client, phone: call.phone, service: call.service, wait: formatClock(call.wait), waitSec: call.wait, status: statusForAbandon(call, operatorCallback, userCallback), operatorCallback: operatorCallback ? `${operatorCallback.operator} · rappel à ${frTime(operatorCallback.time)} · durée ${formatDuration(operatorCallback.duration)}` : 'Aucun rappel operatrice trouve', userCallback: userCallback ? `Utilisateur a deja rappele · ${frTime(userCallback.time)} · entrant decroche · pris par ${userCallback.operator} · durée ${formatDuration(userCallback.duration)}` : 'Aucun rappel entrant ulterieur detecte', details: callDetails([call]) };
+  }), [abandonedBase, stats.operatorCallbacks, stats.userCallbacks]);
+  const abandonedRows = useMemo(() => abandonedRowsAll.filter((row) => abandonedStatusMatches(row, abandonedStatus)), [abandonedRowsAll, abandonedStatus]);
+  const abandonedCounts = useMemo(() => ({ total: abandonedRows.length, premium: abandonedRows.filter((row) => row.service === 'premium').length, forfait: abandonedRows.filter((row) => row.service === 'forfait').length, autre: abandonedRows.filter((row) => row.service === 'autre').length, plus5: abandonedRows.filter((row) => row.waitSec > 5).length, plus10: abandonedRows.filter((row) => row.waitSec > 10).length, plus30: abandonedRows.filter((row) => row.waitSec > 30).length, plus60: abandonedRows.filter((row) => row.waitSec > 60).length }), [abandonedRows]);
 
   async function handleFile(file: File) {
     setRows(mapRows(parseCsv(await file.text()), parseDate));
@@ -469,7 +321,6 @@ function App() {
       setSelectedOperators(['all']);
       return;
     }
-
     const base = selectedOperators.filter((value) => value !== 'all');
     const next = base.includes(operator) ? base.filter((value) => value !== operator) : [...base, operator];
     setSelectedOperators(next.length ? next : ['all']);
@@ -481,23 +332,7 @@ function App() {
 
   function addUser() {
     if (!newEmail.trim()) return;
-
-    setUsers([
-      ...users,
-      {
-        id: Date.now(),
-        email: newEmail.trim(),
-        name: 'Nouvel utilisateur',
-        role: 'user',
-        status: 'active',
-        dashboard: true,
-        monthly: false,
-        clients: false,
-        operators: false,
-        abandoned: false,
-        settings: false,
-      },
-    ]);
+    setUsers([...users, { id: Date.now(), email: newEmail.trim(), name: 'Nouvel utilisateur', role: 'user', status: 'active', dashboard: true, monthly: false, clients: false, operators: false, abandoned: false, settings: false }]);
     setNewEmail('');
   }
 
@@ -506,88 +341,19 @@ function App() {
       <aside className="sidebar">
         <div className="brand">Nexus <span>V2</span></div>
         <div className="userBox"><Shield size={18} />{loggedUser.email}<small>{loggedUser.role}</small></div>
-        <nav>
-          {views.map((view) => (
-            <button key={view.key} className={activeView === view.key ? 'activeNav' : ''} onClick={() => setActiveView(view.key)}>
-              {view.label}
-            </button>
-          ))}
-        </nav>
+        <nav>{views.map((view) => <button key={view.key} className={activeView === view.key ? 'activeNav' : ''} onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav>
       </aside>
-
       <section className="content">
         <Header activeView={activeView} anchor={anchor} onFile={handleFile} />
-        <GlobalFilters
-          periodMode={periodMode}
-          setPeriodMode={setPeriodMode}
-          effectiveStart={effectiveStart}
-          setCustomStart={setCustomStart}
-          effectiveEnd={effectiveEnd}
-          setCustomEnd={setCustomEnd}
-          client={client}
-          setClient={setClient}
-          clients={clients}
-          family={family}
-          setFamily={setFamily}
-          selectedOperators={selectedOperators}
-          toggleOperator={toggleOperator}
-          operators={operators}
-        />
-
+        <GlobalFilters periodMode={periodMode} setPeriodMode={setPeriodMode} effectiveStart={effectiveStart} setCustomStart={setCustomStart} effectiveEnd={effectiveEnd} setCustomEnd={setCustomEnd} client={client} setClient={setClient} clients={clients} family={family} setFamily={setFamily} selectedOperators={selectedOperators} toggleOperator={toggleOperator} operators={operators} />
         {activeView === 'dashboard' && <DashboardView stats={stats} rows={rows} chartData={chartData} chartMetric={chartMetric} setChartMetric={setChartMetric} setDetail={setDetail} setActiveView={setActiveView} />}
-        {activeView === 'monthly' && <MonthlyView data={chartData} chartMetric={chartMetric} setChartMetric={setChartMetric} />}
-        {activeView === 'clients' && (
-          <Panel title="Analyse clients">
-            <DataTable rows={byClient} columns={[["label", "Client"], ["total", "Total"], ["treated", "Traites"], ["abandoned", "Abandonnes"], ["wait", "Attente"], ["talk", "Parole"]]} onOpen={(row) => setDetail(row.details)} />
-          </Panel>
-        )}
-        {activeView === 'operators' && (
-          <Panel title="Analyse operatrices">
-            <DataTable rows={byOperator} columns={[["label", "Operatrice"], ["total", "Appels"], ["sondePrise", "Qte sonde / prise"], ["wait", "Attente"], ["talk", "Parole"], ["avg", "Moyenne"]]} onOpen={(row) => setDetail(row.details)} />
-          </Panel>
-        )}
-        {activeView === 'abandoned' && (
-          <AbandonedView
-            rows={abandonedRows}
-            counts={abandonedCounts}
-            family={abandonedFamily}
-            setFamily={setAbandonedFamily}
-            duration={abandonedDuration}
-            setDuration={setAbandonedDuration}
-            status={abandonedStatus}
-            setStatus={setAbandonedStatus}
-            onOpen={(row) => setDetail(row.details)}
-          />
-        )}
-        {activeView === 'settings' && (
-          <SettingsView
-            users={users}
-            setUsers={setUsers}
-            newEmail={newEmail}
-            setNewEmail={setNewEmail}
-            addUser={addUser}
-            settingsSection={settingsSection}
-            setSettingsSection={setSettingsSection}
-            callbackFamilies={callbackFamilies}
-            toggleFamily={toggleCallbackFamily}
-            minAbandon={minAbandon}
-            setMinAbandon={setMinAbandon}
-            minCallback={minCallback}
-            setMinCallback={setMinCallback}
-            minUserCallback={minUserCallback}
-            setMinUserCallback={setMinUserCallback}
-          />
-        )}
-
-        {!rows.length && (
-          <section className="emptyState">
-            <PhoneCall size={32} />
-            <h2>Importer un export 3CX pour demarrer</h2>
-            <p>La V2 analyse le fichier immediatement.</p>
-          </section>
-        )}
+        {activeView === 'monthly' && <MonthlyView data={chartData} chartMetric={chartMetric} setChartMetric={setChartMetric} setDetail={setDetail} />}
+        {activeView === 'clients' && <Panel title="Analyse clients"><DataTable rows={byClient} columns={[["label", "Client"], ["total", "Total"], ["treated", "Traites"], ["abandoned", "Abandonnes"], ["wait", "Attente"], ["talk", "Parole"]]} onOpen={(row) => setDetail(row.details)} /></Panel>}
+        {activeView === 'operators' && <Panel title="Analyse operatrices"><DataTable rows={byOperator} columns={[["label", "Operatrice"], ["total", "Appels"], ["sondePrise", "Qte sonde / prise"], ["wait", "Attente"], ["talk", "Parole"], ["avg", "Moyenne"]]} onOpen={(row) => setDetail(row.details)} /></Panel>}
+        {activeView === 'abandoned' && <AbandonedView rows={abandonedRows} counts={abandonedCounts} family={abandonedFamily} setFamily={setAbandonedFamily} duration={abandonedDuration} setDuration={setAbandonedDuration} status={abandonedStatus} setStatus={setAbandonedStatus} onOpen={(row) => setDetail(row.details)} />}
+        {activeView === 'settings' && <SettingsView users={users} setUsers={setUsers} newEmail={newEmail} setNewEmail={setNewEmail} addUser={addUser} settingsSection={settingsSection} setSettingsSection={setSettingsSection} callbackFamilies={callbackFamilies} toggleFamily={toggleCallbackFamily} minAbandon={minAbandon} setMinAbandon={setMinAbandon} minCallback={minCallback} setMinCallback={setMinCallback} minUserCallback={minUserCallback} setMinUserCallback={setMinUserCallback} />}
+        {!rows.length && <section className="emptyState"><PhoneCall size={32} /><h2>Importer un export 3CX pour demarrer</h2><p>La V2 analyse le fichier immediatement.</p></section>}
       </section>
-
       {detail && <DetailModal rows={detail} onClose={() => setDetail(null)} />}
     </main>
   );
