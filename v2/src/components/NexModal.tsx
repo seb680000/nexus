@@ -6,9 +6,66 @@ type NexModalProps = {
   onClose: () => void;
 };
 
+const sentimentMethodKeyByColumn: Record<string, string> = {
+  'sentiment ia': 'sentimentMethod',
+  'qualite prise': 'priseScoreMethod',
+  'qualité prise': 'priseScoreMethod',
+  abandons: 'abandonsScoreMethod',
+  'attente moy.': 'attenteScoreMethod',
+  'parole moy.': 'paroleScoreMethod',
+  'effort parking': 'parkingScoreMethod',
+  'reprise parking': 'repriseParkingScoreMethod',
+  'effort rappel': 'rappelScoreMethod',
+  'sortants utiles': 'sortantsScoreMethod',
+  'activite relative': 'activiteScoreMethod',
+  'activité relative': 'activiteScoreMethod',
+  'explication nex': 'sentimentDetail',
+};
+
+function normalize(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function explainSentimentCell(column: string, value: unknown, row: Record<string, unknown>) {
+  const methodKey = sentimentMethodKeyByColumn[normalize(column)];
+  if (!methodKey) return '';
+
+  const method = String(row[methodKey] || '');
+  const operator = String(row.label || row.Operatrice || row.operatrice || 'cette opératrice');
+  const displayed = String(value ?? '-');
+
+  if (normalize(column) === 'sentiment ia') {
+    return [
+      `Cette cellule affiche le Sentiment IA de ${operator} : ${displayed}.`,
+      'Il ne s’agit pas d’un score de volume brut. La note est une moyenne pondérée de plusieurs sous-notes, afin de limiter les discussions liées aux plannings différents ou aux plages plus ou moins chargées.',
+      method,
+    ].filter(Boolean).join('\n\n');
+  }
+
+  if (normalize(column) === 'explication nex') {
+    return [
+      `Cette cellule détaille toute la méthode de calcul du Sentiment IA de ${operator}.`,
+      method || String(value ?? '-'),
+    ].filter(Boolean).join('\n\n');
+  }
+
+  return [
+    `Cette cellule affiche la sous-note ${column} de ${operator} : ${displayed}.`,
+    'Cette sous-note alimente le Sentiment IA global. Elle est calculée uniquement avec les données de la période et des filtres sélectionnés.',
+    method,
+  ].filter(Boolean).join('\n\n');
+}
+
 function explainCell(column: string, value: unknown, row: Record<string, unknown>) {
   const textValue = String(value ?? '-');
   const lowerColumn = column.toLowerCase();
+  const sentimentExplanation = explainSentimentCell(column, value, row);
+
+  if (sentimentExplanation) return sentimentExplanation;
 
   if (lowerColumn.includes('statut')) {
     return `Cette cellule indique l'état métier ou téléphonique de la ligne. Valeur affichée : ${textValue}. Elle permet de savoir si l'appel est à traiter, traité, répondu, non répondu, abandonné ou transféré.`;
@@ -72,7 +129,7 @@ export function NexModal({ title, column, value, row, onClose }: NexModalProps) 
         <section className="nexBody">
           <h3>{column}</h3>
           <div className="nexValue">{String(value ?? '-')}</div>
-          <p>{explainCell(column, value, row)}</p>
+          <p className="nexExplanationText">{explainCell(column, value, row)}</p>
         </section>
       </div>
     </div>
