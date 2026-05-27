@@ -78,6 +78,22 @@ function valueTone(value: unknown, stat?: { avg: number; sd: number }) {
   return 'valueNeutral';
 }
 
+function lowerValueTone(value: unknown, stat?: { avg: number; sd: number }) {
+  if (!stat) return '';
+  const numberValue = parseComparableNumber(value);
+  if (numberValue === null) return '';
+  const tolerance = Math.max(Math.abs(stat.avg) * 0.05, stat.sd * 0.25, 0.01);
+  const highLimit = stat.avg + Math.max(Math.abs(stat.avg) * 0.15, stat.sd * 0.75, 0.01);
+  if (numberValue <= stat.avg - tolerance) return 'valueGood';
+  if (numberValue >= highLimit) return 'valueBad';
+  return 'valueNeutral';
+}
+
+function isLowerBetterColumn(label: string) {
+  const normalizedLabel = normalize(label);
+  return normalizedLabel.includes('parole') || normalizedLabel.includes('talk');
+}
+
 function isHandledAbandon(row: any) {
   const operatorCallback = normalize(String(row.operatorCallback || ''));
   const userCallback = normalize(String(row.userCallback || ''));
@@ -151,7 +167,8 @@ export function DataTable({ rows, columns, onOpen }: DataTableProps) {
             {rows.map((row, index) => (
               <tr key={index}>
                 {columns.map(([key, label]) => {
-                  const tone = customTone(key, label, row) || valueTone(row[key], columnStats.get(key));
+                  const stat = columnStats.get(key);
+                  const tone = customTone(key, label, row) || (isLowerBetterColumn(label) ? lowerValueTone(row[key], stat) : valueTone(row[key], stat));
                   const hasDetails = Array.isArray(row[cellDetailsKey(key)]);
                   return <td key={key} className={`clickableCell ${hasDetails ? 'cellHasDetails' : ''} ${tone}`.trim()} onClick={() => handleCellClick(row, key, label)} title={hasDetails ? 'Cliquer pour voir les appels concernés' : 'Cliquer pour l’explication NEX'}>{row[key]}</td>;
                 })}
