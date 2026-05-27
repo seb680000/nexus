@@ -1,5 +1,5 @@
 import { CalendarDays } from 'lucide-react';
-import type { PeriodMode } from '../types';
+import type { PeriodMode, Service } from '../types';
 
 type GlobalFiltersProps = {
   periodMode: PeriodMode;
@@ -11,6 +11,8 @@ type GlobalFiltersProps = {
   client: string;
   setClient: (value: string) => void;
   clients: string[];
+  family: 'all' | Service;
+  setFamily: (value: 'all' | Service) => void;
   selectedOperators: string[];
   toggleOperator: (operator: string) => void;
   operators: string[];
@@ -26,6 +28,8 @@ export function GlobalFilters({
   client,
   setClient,
   clients,
+  family,
+  setFamily,
   selectedOperators,
   toggleOperator,
   operators,
@@ -64,6 +68,15 @@ export function GlobalFilters({
           {clients.map((name) => (
             <option key={name}>{name}</option>
           ))}
+        </select>
+      </label>
+
+      <label>
+        Famille client
+        <select value={family} onChange={(event) => setFamily(event.target.value as 'all' | Service)}>
+          <option value="all">Tous</option>
+          <option value="premium">Premium</option>
+          <option value="forfait">Forfait</option>
         </select>
       </label>
 
