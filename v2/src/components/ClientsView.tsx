@@ -1,5 +1,5 @@
 import type { CallPath, DetailItem } from '../types';
-import { getOperatorCallback, getUserCallback, isRealOperator } from '../utils/calls';
+import { getOperatorCallback, getUserCallback, isAnswered, isInbound, isInternal, isOutbound, isRealOperator } from '../utils/calls';
 import { formatClock } from '../utils/format';
 import { DataTable } from './DataTable';
 import { Panel } from './Panel';
@@ -28,13 +28,40 @@ function hhmm(date: Date | null) {
   return `${String(date.getHours()).padStart(2, '0')}h${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+function rowEndTime(row: any) {
+  const duration = Math.max(row.talking || 0, row.ringing || 0, 1);
+  return (row.time?.getTime() || 0) + duration * 1000;
+}
+
+function isUsefulInternal(row: any) {
+  const text = `${row.to} ${row.from} ${row.activity}`.toLowerCase();
+  return text.includes('supervision') || text.includes('formation') || text.includes('assistance') || text.includes('transfert');
+}
+
+function operatorOnLineAt(operator: string, at: Date | null, businessRows: any[]) {
+  if (!at) return false;
+  const timestamp = at.getTime();
+  return businessRows.some((row) => {
+    if (!row.time || row.operator !== operator) return false;
+    if (isInternal(row) && !isUsefulInternal(row)) return false;
+    if (!(isInbound(row) || isOutbound(row) || isInternal(row)) || !isAnswered(row) || row.talking <= 0) return false;
+    return row.time.getTime() <= timestamp && rowEndTime(row) >= timestamp;
+  });
+}
+
+function availableOperator(call: CallPath, businessRows: any[]) {
+  const operators = [...new Set(businessRows.map((row) => row.operator).filter(isRealOperator))].sort();
+  const available = operators.filter((operator) => !operatorOnLineAt(operator, call.date, businessRows));
+  return available.join(', ') || 'Aucune disponible détectée';
+}
+
 function displayOperator(call: CallPath) {
   if (isRealOperator(call.operator)) return call.operator;
   const detected = call.rows.map((row) => row.operator).find(isRealOperator);
   return detected || 'À attribuer';
 }
 
-function callLineDetails(calls: CallPath[]): DetailItem[] {
+function callLineDetails(calls: CallPath[], businessRows: any[]): DetailItem[] {
   return calls.map((call) => {
     const operator = displayOperator(call);
     return {
@@ -42,6 +69,7 @@ function callLineDetails(calls: CallPath[]): DetailItem[] {
       date: hhmm(call.date),
       client: call.client,
       operator,
+      availableOperator: availableOperator(call, businessRows),
       phone: call.phone,
       step: call.treated ? 'Appel traité' : 'Appel non traité',
       status: call.treated ? `Traité par ${operator}` : operator === 'À attribuer' ? 'Non traité / opératrice à attribuer' : `Non traité / détecté chez ${operator}`,
@@ -73,20 +101,20 @@ export function ClientsView({ calls, callbackSettings, outboundRows, businessRow
     return {
       label,
       total: list.length,
-      totalDetails: callLineDetails(list),
+      totalDetails: callLineDetails(list, businessRows),
       treated: treated.length,
-      treatedDetails: callLineDetails(treated),
+      treatedDetails: callLineDetails(treated, businessRows),
       treatedRate: list.length ? Math.round((treated.length / list.length) * 100) : 0,
       abandoned: abandoned.length,
-      abandonedDetails: callLineDetails(abandoned),
+      abandonedDetails: callLineDetails(abandoned, businessRows),
       abandonedRate: list.length ? Math.round((abandoned.length / list.length) * 100) : 0,
       recalls: recalled.length,
-      recallsDetails: callLineDetails(recalled),
+      recallsDetails: callLineDetails(recalled, businessRows),
       wait: formatClock(list.reduce((sum, call) => sum + call.wait, 0)),
       waitMedian: formatClock(median(waitValues)),
       talk: formatClock(list.reduce((sum, call) => sum + call.talk, 0)),
       talkMedian: formatClock(median(talkValues)),
-      details: callLineDetails(list),
+      details: callLineDetails(list, businessRows),
     };
   }).sort((a, b) => b.total - a.total);
 
