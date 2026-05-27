@@ -84,6 +84,10 @@ function elapsedSeconds(start: Date | null, endTimestamp: number) {
   return Math.max(0, Math.round((endTimestamp - start.getTime()) / 1000));
 }
 
+function callEndTimestamp(call: CallPath) {
+  return call.rows.reduce((max, row) => Math.max(max, rowEndTimestamp(row)), call.date?.getTime() || 0);
+}
+
 export function phoneFrom(value: string) {
   return String(value || '').trim().match(/0\d{6,}/)?.[0] || '';
 }
@@ -382,9 +386,10 @@ export function isDurationMatch(seconds: number, filter: DurationFilter) {
 
 export function getOperatorCallback(call: CallPath, outboundRows: Row[], minCallback: number): CallbackInfo {
   if (!call.phone || !call.date) return null;
+  const afterCallEnd = callEndTimestamp(call);
 
   const found = outboundRows.find(
-    (row) => row.phone === call.phone && row.time && row.time > call.date! && row.talking >= minCallback
+    (row) => row.callId !== call.callId && row.phone === call.phone && row.time && row.time.getTime() > afterCallEnd && row.talking >= minCallback
   );
 
   return found ? { operator: found.operator || 'Non identifie', time: found.time, duration: found.talking } : null;
@@ -392,14 +397,16 @@ export function getOperatorCallback(call: CallPath, outboundRows: Row[], minCall
 
 export function getUserCallback(call: CallPath, allRows: Row[], minUserCallback: number): CallbackInfo {
   if (!call.phone || !call.date) return null;
+  const afterCallEnd = callEndTimestamp(call);
 
   const found = allRows.find(
     (row) =>
+      row.callId !== call.callId &&
       isInbound(row) &&
       isAnswered(row) &&
       row.phone === call.phone &&
       row.time &&
-      row.time > call.date! &&
+      row.time.getTime() > afterCallEnd &&
       row.talking >= minUserCallback
   );
 
