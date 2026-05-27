@@ -65,6 +65,7 @@ export type DetailItem = {
   date: string;
   client: string;
   operator: string;
+  availableOperator?: string;
   phone: string;
   step: string;
   status: string;
