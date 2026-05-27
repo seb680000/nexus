@@ -168,7 +168,6 @@ function sentimentExplanation(parts: ScorePart[], finalScore: number) {
 
 function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const availablePickupRate = raw.availableOpportunities ? raw.availableTakes / raw.availableOpportunities : 0;
-  const availableMissPressure = raw.availableOpportunities ? Math.max(0, raw.availableOpportunities - raw.availableTakes) / raw.availableOpportunities : 0;
   const abandonPressure = raw.availableOpportunities ? raw.linkedAbandons / raw.availableOpportunities : raw.linkedAbandons ? 1 : 0;
   const parkingEffort = raw.inbound ? raw.handledParking / raw.inbound : raw.handledParking ? 1 : 0;
   const parkingPickupEffort = raw.inbound ? raw.parkingPickup / raw.inbound : raw.parkingPickup ? 1 : 0;
@@ -284,7 +283,6 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
     sentimentValue: finalScore,
     sentimentDetail: sentimentExplanation(parts, finalScore),
     sentimentMethod: `Sentiment IA = somme des sous-notes pondérées.\n${parts.map((part) => `${part.label} ${part.score.toFixed(1)} × ${Math.round(part.weight * 100)}%`).join('\n')}\nRésultat : ${finalScore.toFixed(1)}/10.`,
-    availableMissRate: pct(Math.max(0, raw.availableOpportunities - raw.availableTakes), raw.availableOpportunities),
     ...partMap,
     ...methodMap,
   };
@@ -294,11 +292,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
   const { takenByOperator, probesByOperator } = buildOperatorAnalysis(calls);
   const outboundRows = rows.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 20 && isRealOperator(row.operator));
   const internalRows = rows.filter((row) => isInternal(row) && isAnswered(row) && isRealOperator(row.operator));
-  const names = [...new Set([
-    ...takenByOperator.keys(),
-    ...probesByOperator.keys(),
-    ...rows.map((row) => row.operator).filter(isRealOperator),
-  ])].sort();
+  const names = [...new Set([...takenByOperator.keys(), ...probesByOperator.keys(), ...rows.map((row) => row.operator).filter(isRealOperator)])].sort();
 
   const rawData: OperatorRawScore[] = names.map((operator) => {
     const inboundCalls = takenByOperator.get(operator) || [];
@@ -380,6 +374,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
       paroleScoreMethod: sentiment.paroleScoreMethod,
       parkingScore: sentiment.parkingScore,
       parkingScoreMethod: sentiment.parkingScoreMethod,
+      repriseParkingCount: raw.parkingPickup,
       repriseParkingScore: sentiment.repriseParkingScore,
       repriseParkingScoreMethod: sentiment.repriseParkingScoreMethod,
       rappelScore: sentiment.rappelScore,
@@ -431,7 +426,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
             ['attenteScore', 'Attente moy.'],
             ['paroleScore', 'Parole moy.'],
             ['parkingScore', 'Effort parking'],
-            ['repriseParkingScore', 'Reprise parking'],
+            ['repriseParkingCount', 'Reprise parking'],
             ['rappelScore', 'Effort rappel'],
             ['sortantsScore', 'Sortants utiles'],
             ['activiteScore', 'Activite relative'],
