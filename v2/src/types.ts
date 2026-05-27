@@ -73,12 +73,12 @@ export type DetailItem = {
 
 export type UserRow = {
   id: number;
-  firstName: string;
-  lastName: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
-  password: string;
-  userType: UserType;
-  viewMode: UserViewMode;
+  password?: string;
+  userType?: UserType;
+  viewMode?: UserViewMode;
   name: string;
   role: string;
   status: string;
