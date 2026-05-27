@@ -1,4 +1,4 @@
-import type { AbandonedReportRow, DurationFilter, Service } from '../types';
+import type { AbandonedReportRow, AbandonedStatusFilter, DurationFilter, Service } from '../types';
 import { exportAbandonedCsv, exportAbandonedPdf } from '../utils/exports';
 import { DataTable } from './DataTable';
 import { Panel } from './Panel';
@@ -19,6 +19,8 @@ type AbandonedViewProps = {
   setFamily: (value: 'all' | Service) => void;
   duration: DurationFilter;
   setDuration: (value: DurationFilter) => void;
+  status: AbandonedStatusFilter;
+  setStatus: (value: AbandonedStatusFilter) => void;
   onOpen: (row: AbandonedReportRow) => void;
 };
 
@@ -29,11 +31,26 @@ export function AbandonedView({
   setFamily,
   duration,
   setDuration,
+  status,
+  setStatus,
   onOpen,
 }: AbandonedViewProps) {
   return (
     <Panel title="Appels abandonnes">
       <section className="filters">
+        <label>
+          Statut
+          <select value={status} onChange={(event) => setStatus(event.target.value as AbandonedStatusFilter)}>
+            <option value="all">Tous les statuts</option>
+            <option value="toCall">À rappeler</option>
+            <option value="operatorDone">Traité opératrice</option>
+            <option value="userCalledBack">Utilisateur a déjà rappelé</option>
+            <option value="under5">Appel de moins de 5 secondes</option>
+            <option value="lostParking">Perdu pendant parking</option>
+            <option value="treatedAfterParking">Traité après perte parking</option>
+          </select>
+        </label>
+
         <label>
           Famille
           <select value={family} onChange={(event) => setFamily(event.target.value as 'all' | Service)}>
