@@ -1,16 +1,18 @@
-import { CartesianGrid, LabelList, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useState } from 'react';
+import { CartesianGrid, LabelList, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CallPath, ChartBucket, ChartMetric, DetailItem, Row, ViewKey } from '../types';
 import { callDetails, outboundDetails, totalDays, dateRangeLabel } from '../utils/calls';
 import { frDate } from '../utils/dates';
 import { formatDuration } from '../utils/format';
 import { nexMetricHelp } from '../utils/nexHelp';
+import { DataTable } from './DataTable';
 import { Panel } from './Panel';
 import { StatCard } from './StatCard';
 
 export const chartMetricOptions: { key: ChartMetric; label: string }[] = [
   { key: 'invoiceTotal', label: 'Total a facturer' },
   { key: 'treated', label: 'Appels traites' },
-  { key: 'abandoned', label: 'Abandonnes' },
+  { key: 'abandoned', label: 'Appels abandonnes' },
   { key: 'total', label: 'Total entrants' },
   { key: 'outbound', label: 'Sortants clients' },
   { key: 'callbacksDone', label: 'Rappels realises' },
@@ -30,6 +32,20 @@ export const chartBucketOptions: { key: ChartBucket; label: string }[] = [
   { key: 'minute', label: 'Par minute' },
 ];
 
+const metricColors: Record<ChartMetric, string> = {
+  invoiceTotal: '#2563eb',
+  treated: '#16a34a',
+  abandoned: '#dc2626',
+  total: '#7c3aed',
+  outbound: '#ea580c',
+  callbacksDone: '#0891b2',
+  callbacksRemaining: '#ca8a04',
+  internal: '#475569',
+  maxWait: '#be123c',
+  avgAbandonedWait: '#9333ea',
+  avgTalk: '#0f766e',
+};
+
 export function isDurationMetric(metric: ChartMetric) {
   return metric === 'maxWait' || metric === 'avgAbandonedWait' || metric === 'avgTalk';
 }
@@ -47,19 +63,20 @@ export function chartLabelFormatter(value: unknown, metric: ChartMetric) {
   return formatChartValue(value, metric);
 }
 
-export function NexChartTooltip({ active, payload, label, metricLabel, metric }: any) {
+export function NexChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  const value = payload[0]?.value;
   const data = payload[0]?.payload || {};
   const operators = Array.isArray(data.operatorSummary) ? data.operatorSummary : [];
   return (
     <div className="nexTooltip wideTooltip">
       <strong>NEX · {label}</strong>
-      <b>{metricLabel} : {formatChartValue(value, metric)}</b>
-      <p>{nexMetricHelp(metricLabel)}</p>
+      {payload.map((entry: any) => (
+        <b key={entry.dataKey} style={{ color: entry.color }}>{entry.name} : {formatChartValue(entry.value, entry.dataKey)}</b>
+      ))}
+      <p>{nexMetricHelp('Indicateur courbe')}</p>
       <div className="tooltipTotals"><span>Entrants traités : {data.treatedCount || 0}</span><span>Sortants : {data.outboundCount || 0}</span></div>
       {operators.length > 0 && <div className="tooltipOperators">{operators.map((line: string) => <small key={line}>{line}</small>)}</div>}
-      <em>Cliquer sur le point pour ouvrir le détail des appels.</em>
+      <em>Cliquer sur le point pour afficher le détail des appels sous la courbe.</em>
     </div>
   );
 }
@@ -90,21 +107,37 @@ type DashboardViewProps = {
   stats: DashboardStats;
   rows: Row[];
   chartData: ChartPoint[];
-  chartMetric: ChartMetric;
-  setChartMetric: (metric: ChartMetric) => void;
+  chartMetrics: ChartMetric[];
+  setChartMetrics: (metrics: ChartMetric[]) => void;
   chartBucket: ChartBucket;
   setChartBucket: (bucket: ChartBucket) => void;
+  chartOperators: string[];
+  setChartOperators: (operators: string[]) => void;
+  operators: string[];
   setDetail: (rows: DetailItem[]) => void;
   setActiveView: (view: ViewKey) => void;
 };
 
-export function openChartDetails(data: any, setDetail: (rows: DetailItem[]) => void) {
+export function openChartDetails(data: any, setRows: (rows: DetailItem[]) => void) {
   const rows = Array.isArray(data?.detailRows) ? data.detailRows : [];
-  if (rows.length) setDetail(rows);
+  setRows(rows);
 }
 
-export function DashboardView({ stats, rows, chartData, chartMetric, setChartMetric, chartBucket, setChartBucket, setDetail, setActiveView }: DashboardViewProps) {
-  const selectedMetric = chartMetricOptions.find((option) => option.key === chartMetric)?.label || 'Total a facturer';
+function metricLabel(metric: ChartMetric) {
+  return chartMetricOptions.find((option) => option.key === metric)?.label || metric;
+}
+
+function toggleList<T extends string>(value: T, current: T[], fallback: T) {
+  if (value === fallback) return [fallback];
+  const base = current.filter((item) => item !== fallback);
+  const next = base.includes(value) ? base.filter((item) => item !== value) : [...base, value];
+  return next.length ? next : [fallback];
+}
+
+export function DashboardView({ stats, rows, chartData, chartMetrics, setChartMetrics, chartBucket, setChartBucket, chartOperators, setChartOperators, operators, setDetail, setActiveView }: DashboardViewProps) {
+  const [selectedRows, setSelectedRows] = useState<DetailItem[]>([]);
+  const visibleMetrics = chartMetrics.length ? chartMetrics : ['invoiceTotal', 'abandoned'];
+
   return (
     <>
       <section className="cards">
@@ -121,24 +154,69 @@ export function DashboardView({ stats, rows, chartData, chartMetric, setChartMet
         <StatCard title="Attente moy." value={formatDuration(stats.avgAbandonedWait)} subtitle="abandonnes" />
         <StatCard title="Parole moy." value={formatDuration(stats.avgTalk)} subtitle={`${stats.treated.length} conversations`} />
       </section>
+
       <Panel title="Courbe par periode">
-        <section className="filters chartFilters">
-          <label title={nexMetricHelp('Indicateur courbe')}>Indicateur courbe
-            <select value={chartMetric} onChange={(event) => setChartMetric(event.target.value as ChartMetric)}>{chartMetricOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select>
-          </label>
+        <section className="filters chartFilters multiChartFilters">
+          <label>Indicateurs courbe</label>
+          <div className="operatorBox chartChoiceBox">
+            {chartMetricOptions.map((option) => (
+              <label key={option.key}>
+                <input type="checkbox" checked={visibleMetrics.includes(option.key)} onChange={() => setChartMetrics(toggleList(option.key, visibleMetrics, 'invoiceTotal') as ChartMetric[])} />
+                {option.label}
+              </label>
+            ))}
+          </div>
+
           <label>Vue graphique
             <select value={chartBucket} onChange={(event) => setChartBucket(event.target.value as ChartBucket)}>{chartBucketOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select>
           </label>
+
+          <label>Par operatrice</label>
+          <div className="operatorBox chartChoiceBox">
+            <label><input type="checkbox" checked={chartOperators.includes('all')} onChange={() => setChartOperators(['all'])} /> Toutes</label>
+            {operators.map((operator) => (
+              <label key={operator}>
+                <input type="checkbox" checked={!chartOperators.includes('all') && chartOperators.includes(operator)} onChange={() => setChartOperators(toggleList(operator, chartOperators, 'all'))} />
+                {operator}
+              </label>
+            ))}
+          </div>
         </section>
-        <ResponsiveContainer width="100%" height={360}>
-          <LineChart data={chartData} onClick={(event: any) => openChartDetails(event?.activePayload?.[0]?.payload, setDetail)}>
+
+        <ResponsiveContainer width="100%" height={420}>
+          <LineChart data={chartData} onClick={(event: any) => openChartDetails(event?.activePayload?.[0]?.payload, setSelectedRows)}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" />
-            <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
-            <Tooltip content={<NexChartTooltip metricLabel={selectedMetric} metric={chartMetric} />} />
-            <Line type="linear" dataKey="value" name={selectedMetric} dot={{ r: 5 }} activeDot={{ r: 8 }} className="clickableChart"><LabelList dataKey="value" position="top" formatter={(value: unknown) => chartLabelFormatter(value, chartMetric)} /></Line>
+            <XAxis dataKey="month" interval="preserveStartEnd" />
+            <YAxis />
+            <Tooltip content={<NexChartTooltip />} />
+            <Legend />
+            {visibleMetrics.map((metric) => (
+              <Line key={metric} type="linear" dataKey={metric} name={metricLabel(metric)} stroke={metricColors[metric]} dot={{ r: 5 }} activeDot={{ r: 8 }} className="clickableChart">
+                <LabelList dataKey={metric} position="top" formatter={(value: unknown) => chartLabelFormatter(value, metric)} />
+              </Line>
+            ))}
           </LineChart>
         </ResponsiveContainer>
+
+        {selectedRows.length > 0 && (
+          <section className="chartDetailsBelow">
+            <h3>Détail des appels du point sélectionné</h3>
+            <DataTable
+              rows={selectedRows}
+              columns={[
+                ['date', 'Date'],
+                ['client', 'Client'],
+                ['operator', 'Operatrice'],
+                ['phone', 'Telephone'],
+                ['step', 'Etape'],
+                ['status', 'Statut'],
+                ['wait', 'Attente'],
+                ['talk', 'Parole'],
+              ]}
+              onOpen={(row) => setDetail([row])}
+            />
+          </section>
+        )}
       </Panel>
     </>
   );
