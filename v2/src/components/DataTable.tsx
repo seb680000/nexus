@@ -125,9 +125,23 @@ function customTone(key: string, label: string, row: any) {
   return '';
 }
 
+function cellDetailsKey(key: string) {
+  return `${key}Details`;
+}
+
 export function DataTable({ rows, columns, onOpen }: DataTableProps) {
   const [nexCell, setNexCell] = useState<NexCell>(null);
   const columnStats = useMemo(() => buildColumnStats(rows, columns), [rows, columns]);
+
+  function handleCellClick(row: any, key: string, label: string) {
+    const details = row[cellDetailsKey(key)];
+    if (Array.isArray(details)) {
+      onOpen({ ...row, details });
+      return;
+    }
+    setNexCell({ column: label, value: row[key], row });
+  }
+
   return (
     <>
       <div className="tableWrap">
@@ -138,7 +152,8 @@ export function DataTable({ rows, columns, onOpen }: DataTableProps) {
               <tr key={index}>
                 {columns.map(([key, label]) => {
                   const tone = customTone(key, label, row) || valueTone(row[key], columnStats.get(key));
-                  return <td key={key} className={`clickableCell ${tone}`.trim()} onClick={() => setNexCell({ column: label, value: row[key], row })} title="Cliquer pour l'explication NEX">{row[key]}</td>;
+                  const hasDetails = Array.isArray(row[cellDetailsKey(key)]);
+                  return <td key={key} className={`clickableCell ${hasDetails ? 'cellHasDetails' : ''} ${tone}`.trim()} onClick={() => handleCellClick(row, key, label)} title={hasDetails ? 'Cliquer pour voir les appels concernés' : 'Cliquer pour l’explication NEX'}>{row[key]}</td>;
                 })}
                 <td><button className="small" onClick={() => onOpen(row)}>{row.actions || 'Ouvrir'}</button></td>
               </tr>
