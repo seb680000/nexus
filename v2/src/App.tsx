@@ -251,6 +251,7 @@ function App() {
   const [rows, setRows] = useState<Row[]>([]);
   const [periodMode, setPeriodMode] = useState<PeriodMode>('custom');
   const [client, setClient] = useState('all');
+  const [family, setFamily] = useState<'all' | Service>('all');
   const [selectedOperators, setSelectedOperators] = useState<string[]>(['all']);
   const [detail, setDetail] = useState<DetailItem[] | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>('dashboard');
@@ -304,35 +305,45 @@ function App() {
     [rows, periodMode, anchor, effectiveStart, effectiveEnd]
   );
 
+  const familyCalls = useMemo(
+    () => periodCalls.filter((call) => family === 'all' || call.service === family),
+    [periodCalls, family]
+  );
+
+  const familyRows = useMemo(
+    () => periodRows.filter((row) => family === 'all' || familyCalls.some((call) => call.callId === row.callId)),
+    [periodRows, family, familyCalls]
+  );
+
   const clients = useMemo(
-    () => [...new Set(periodCalls.map((call) => call.client))].filter(isClientName).sort(),
-    [periodCalls]
+    () => [...new Set(familyCalls.map((call) => call.client))].filter(isClientName).sort(),
+    [familyCalls]
   );
 
   const operators = useMemo(
     () =>
-      [...new Set(periodCalls.flatMap((call) => call.rows.map((row) => row.operator).concat(call.operator)))]
+      [...new Set(familyCalls.flatMap((call) => call.rows.map((row) => row.operator).concat(call.operator)))]
         .filter((operator) => operator && operator !== 'Non identifie')
         .sort(),
-    [periodCalls]
+    [familyCalls]
   );
 
   const filteredCalls = useMemo(
     () =>
-      periodCalls.filter(
+      familyCalls.filter(
         (call) =>
-          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators, periodRows)
+          (client === 'all' || call.client === client) && callHasSelectedOperator(call, selectedOperators, familyRows)
       ),
-    [periodCalls, periodRows, client, selectedOperators]
+    [familyCalls, familyRows, client, selectedOperators]
   );
 
   const filteredRows = useMemo(
     () =>
-      periodRows.filter(
+      familyRows.filter(
         (row) =>
           (client === 'all' || row.client === client) && rowHasSelectedOperator(row, selectedOperators)
       ),
-    [periodRows, client, selectedOperators]
+    [familyRows, client, selectedOperators]
   );
 
   const callbackSettings = useMemo(
@@ -496,6 +507,8 @@ function App() {
           client={client}
           setClient={setClient}
           clients={clients}
+          family={family}
+          setFamily={setFamily}
           selectedOperators={selectedOperators}
           toggleOperator={toggleOperator}
           operators={operators}
