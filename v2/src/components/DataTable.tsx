@@ -91,7 +91,7 @@ function lowerValueTone(value: unknown, stat?: { avg: number; sd: number }) {
 
 function isLowerBetterColumn(label: string) {
   const normalizedLabel = normalize(label);
-  return normalizedLabel.includes('parole') || normalizedLabel.includes('talk');
+  return normalizedLabel.includes('parole') || normalizedLabel.includes('talk') || normalizedLabel.includes('attente') || normalizedLabel.includes('wait');
 }
 
 function isHandledAbandon(row: any) {
