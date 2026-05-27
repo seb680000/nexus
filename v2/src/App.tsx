@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { PhoneCall, Shield } from 'lucide-react';
 import './styles.css';
 
-import type { AbandonedReportRow, CallPath, ChartMetric, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
+import type { AbandonedReportRow, AbandonedStatusFilter, CallPath, ChartMetric, DetailItem, DurationFilter, PeriodMode, Row, Service, UserRow, ViewKey } from './types';
 import { AbandonedView } from './components/AbandonedView';
 import { DashboardView } from './components/DashboardView';
 import { DataTable } from './components/DataTable';
@@ -120,6 +120,20 @@ function callHasSelectedOperator(call: CallPath, selectedOperators: string[], ro
 function rowHasSelectedOperator(row: Row, selectedOperators: string[]) {
   if (selectedOperators.includes('all')) return true;
   return selectedOperators.includes(row.operator) || (isOperatorProbe(row) && selectedOperators.includes(row.operator));
+}
+
+function abandonedStatusMatches(row: AbandonedReportRow, status: AbandonedStatusFilter) {
+  const value = String(row.status || '').toLowerCase();
+
+  if (status === 'all') return true;
+  if (status === 'toCall') return value.includes('à rappeler') || value.includes('a rappeler');
+  if (status === 'operatorDone') return value === 'traité' || value === 'traite' || value.includes('traité opératrice') || value.includes('traite operatrice');
+  if (status === 'userCalledBack') return value.includes('utilisateur a déjà rappelé') || value.includes('utilisateur a deja rappele');
+  if (status === 'under5') return value.includes('moins de 5');
+  if (status === 'lostParking') return value.includes('perdu pendant parking');
+  if (status === 'treatedAfterParking') return value.includes('traité après perte parking') || value.includes('traite apres perte parking');
+
+  return true;
 }
 
 function periodFilter(date: Date | null, mode: PeriodMode, anchor: Date | null, customStart: string, customEnd: string) {
@@ -279,6 +293,7 @@ function App() {
   const [customEnd, setCustomEnd] = useState('');
   const [abandonedFamily, setAbandonedFamily] = useState<'all' | Service>('all');
   const [abandonedDuration, setAbandonedDuration] = useState<DurationFilter>('all');
+  const [abandonedStatus, setAbandonedStatus] = useState<AbandonedStatusFilter>('all');
   const [callbackFamilies, setCallbackFamilies] = useState<Service[]>(['premium']);
   const [minAbandon, setMinAbandon] = useState(5);
   const [minCallback, setMinCallback] = useState(20);
@@ -392,14 +407,14 @@ function App() {
       .sort((a, b) => b.total - a.total);
   }, [filteredCalls]);
 
-  const abandonedVisible = useMemo(
+  const abandonedBase = useMemo(
     () => stats.abandoned.filter((call) => (abandonedFamily === 'all' || call.service === abandonedFamily) && isDurationMatch(call.wait, abandonedDuration)),
     [stats.abandoned, abandonedFamily, abandonedDuration]
   );
 
-  const abandonedRows = useMemo(
+  const abandonedRowsAll = useMemo(
     (): AbandonedReportRow[] =>
-      abandonedVisible.map((call) => {
+      abandonedBase.map((call) => {
         const operatorCallback = stats.operatorCallbacks.get(call.callId) || null;
         const userCallback = stats.userCallbacks.get(call.callId) || null;
 
@@ -420,21 +435,26 @@ function App() {
           details: callDetails([call]),
         };
       }),
-    [abandonedVisible, stats.operatorCallbacks, stats.userCallbacks]
+    [abandonedBase, stats.operatorCallbacks, stats.userCallbacks]
+  );
+
+  const abandonedRows = useMemo(
+    () => abandonedRowsAll.filter((row) => abandonedStatusMatches(row, abandonedStatus)),
+    [abandonedRowsAll, abandonedStatus]
   );
 
   const abandonedCounts = useMemo(
     () => ({
-      total: abandonedVisible.length,
-      premium: abandonedVisible.filter((call) => call.service === 'premium').length,
-      forfait: abandonedVisible.filter((call) => call.service === 'forfait').length,
-      autre: abandonedVisible.filter((call) => call.service === 'autre').length,
-      plus5: abandonedVisible.filter((call) => call.wait > 5).length,
-      plus10: abandonedVisible.filter((call) => call.wait > 10).length,
-      plus30: abandonedVisible.filter((call) => call.wait > 30).length,
-      plus60: abandonedVisible.filter((call) => call.wait > 60).length,
+      total: abandonedRows.length,
+      premium: abandonedRows.filter((row) => row.service === 'premium').length,
+      forfait: abandonedRows.filter((row) => row.service === 'forfait').length,
+      autre: abandonedRows.filter((row) => row.service === 'autre').length,
+      plus5: abandonedRows.filter((row) => row.waitSec > 5).length,
+      plus10: abandonedRows.filter((row) => row.waitSec > 10).length,
+      plus30: abandonedRows.filter((row) => row.waitSec > 30).length,
+      plus60: abandonedRows.filter((row) => row.waitSec > 60).length,
     }),
-    [abandonedVisible]
+    [abandonedRows]
   );
 
   async function handleFile(file: File) {
@@ -527,7 +547,17 @@ function App() {
           </Panel>
         )}
         {activeView === 'abandoned' && (
-          <AbandonedView rows={abandonedRows} counts={abandonedCounts} family={abandonedFamily} setFamily={setAbandonedFamily} duration={abandonedDuration} setDuration={setAbandonedDuration} onOpen={(row) => setDetail(row.details)} />
+          <AbandonedView
+            rows={abandonedRows}
+            counts={abandonedCounts}
+            family={abandonedFamily}
+            setFamily={setAbandonedFamily}
+            duration={abandonedDuration}
+            setDuration={setAbandonedDuration}
+            status={abandonedStatus}
+            setStatus={setAbandonedStatus}
+            onOpen={(row) => setDetail(row.details)}
+          />
         )}
         {activeView === 'settings' && (
           <SettingsView
