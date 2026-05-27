@@ -1,5 +1,5 @@
 import type { CallPath, DetailItem } from '../types';
-import { getOperatorCallback, getUserCallback } from '../utils/calls';
+import { getOperatorCallback, getUserCallback, isRealOperator } from '../utils/calls';
 import { formatClock } from '../utils/format';
 import { DataTable } from './DataTable';
 import { Panel } from './Panel';
@@ -28,18 +28,27 @@ function hhmm(date: Date | null) {
   return `${String(date.getHours()).padStart(2, '0')}h${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+function displayOperator(call: CallPath) {
+  if (isRealOperator(call.operator)) return call.operator;
+  const detected = call.rows.map((row) => row.operator).find(isRealOperator);
+  return detected || 'À attribuer';
+}
+
 function callLineDetails(calls: CallPath[]): DetailItem[] {
-  return calls.map((call) => ({
-    id: call.callId,
-    date: hhmm(call.date),
-    client: call.client,
-    operator: call.operator || 'Non identifie',
-    phone: call.phone,
-    step: call.treated ? 'Appel traité' : 'Appel non traité',
-    status: call.treated ? `Traité par ${call.operator || 'Non identifié'}` : 'Non traité / abandonné',
-    wait: call.wait,
-    talk: call.talk,
-  }));
+  return calls.map((call) => {
+    const operator = displayOperator(call);
+    return {
+      id: call.callId,
+      date: hhmm(call.date),
+      client: call.client,
+      operator,
+      phone: call.phone,
+      step: call.treated ? 'Appel traité' : 'Appel non traité',
+      status: call.treated ? `Traité par ${operator}` : operator === 'À attribuer' ? 'Non traité / opératrice à attribuer' : `Non traité / détecté chez ${operator}`,
+      wait: call.wait,
+      talk: call.talk,
+    };
+  });
 }
 
 export function ClientsView({ calls, callbackSettings, outboundRows, businessRows, setDetail }: ClientsViewProps) {
