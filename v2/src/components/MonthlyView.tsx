@@ -1,15 +1,16 @@
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ChartMetric } from '../types';
-import { chartMetricOptions, formatChartValue, NexChartTooltip } from './DashboardView';
+import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { ChartMetric, DetailItem } from '../types';
+import { chartLabelFormatter, chartMetricOptions, formatChartValue, NexChartTooltip, openChartDetails } from './DashboardView';
 import { Panel } from './Panel';
 
 type MonthlyViewProps = {
-  data: Array<Record<string, string | number>>;
+  data: Array<Record<string, any>>;
   chartMetric: ChartMetric;
   setChartMetric: (metric: ChartMetric) => void;
+  setDetail: (rows: DetailItem[]) => void;
 };
 
-export function MonthlyView({ data, chartMetric, setChartMetric }: MonthlyViewProps) {
+export function MonthlyView({ data, chartMetric, setChartMetric, setDetail }: MonthlyViewProps) {
   const selectedMetric = chartMetricOptions.find((option) => option.key === chartMetric)?.label || 'Total a facturer';
 
   return (
@@ -25,13 +26,15 @@ export function MonthlyView({ data, chartMetric, setChartMetric }: MonthlyViewPr
         </label>
       </section>
 
-      <ResponsiveContainer width="100%" height={360}>
-        <BarChart data={data}>
+      <ResponsiveContainer width="100%" height={380}>
+        <BarChart data={data} onClick={(event: any) => openChartDetails(event?.activePayload?.[0]?.payload, setDetail)}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="month" />
           <YAxis tickFormatter={(value) => formatChartValue(value, chartMetric)} />
           <Tooltip content={<NexChartTooltip metricLabel={selectedMetric} metric={chartMetric} />} />
-          <Bar dataKey="value" name={selectedMetric} />
+          <Bar dataKey="value" name={selectedMetric} className="clickableChart">
+            <LabelList dataKey="value" position="top" formatter={(value: unknown) => chartLabelFormatter(value, chartMetric)} />
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </Panel>
