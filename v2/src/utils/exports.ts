@@ -1,11 +1,18 @@
 import type { AbandonedReportRow } from '../types';
 import { buildCsv } from './csv';
 
-export function exportAbandonedCsv(rows: AbandonedReportRow[]) {
+type ExportRow = AbandonedReportRow & {
+  missedRecalledDay?: string;
+  assignedCallbackOperator?: string;
+};
+
+export function exportAbandonedCsv(rows: ExportRow[]) {
   const headers = [
     'Date heure appel',
     'Statut',
     'Client',
+    'Appels manques / rappels jour',
+    'Operatrice chargee du rappel',
     'Telephone',
     'Famille',
     'Duree attente',
@@ -17,6 +24,8 @@ export function exportAbandonedCsv(rows: AbandonedReportRow[]) {
     row.date,
     row.status,
     row.label,
+    row.missedRecalledDay || '',
+    row.assignedCallbackOperator || '',
     row.phone,
     row.service,
     row.wait,
@@ -35,11 +44,11 @@ export function exportAbandonedCsv(rows: AbandonedReportRow[]) {
   URL.revokeObjectURL(url);
 }
 
-export function exportAbandonedPdf(rows: AbandonedReportRow[]) {
+export function exportAbandonedPdf(rows: ExportRow[]) {
   const htmlRows = rows
     .map(
       (row) =>
-        `<tr><td>${row.status}</td><td>${row.date}</td><td>${row.label}<br/>${row.phone}</td><td>${row.wait}</td><td>${row.service}</td><td>${row.operatorCallback}</td><td>${row.userCallback}</td></tr>`
+        `<tr><td>${row.status}</td><td>${row.date}</td><td>${row.label}<br/>${row.phone}</td><td>${row.missedRecalledDay || ''}</td><td>${row.assignedCallbackOperator || ''}</td><td>${row.wait}</td><td>${row.service}</td><td>${row.operatorCallback}</td><td>${row.userCallback}</td></tr>`
     )
     .join('');
 
@@ -52,8 +61,8 @@ export function exportAbandonedPdf(rows: AbandonedReportRow[]) {
         <title>Appels abandonnes rappels</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 24px; }
-          table { width: 100%; border-collapse: collapse; font-size: 12px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          th, td { border: 1px solid #ddd; padding: 7px; text-align: left; vertical-align: top; }
           th { background: #f1f5f9; }
         </style>
       </head>
@@ -66,6 +75,8 @@ export function exportAbandonedPdf(rows: AbandonedReportRow[]) {
               <th>Statut</th>
               <th>Date / heure appel</th>
               <th>Appelant / client</th>
+              <th>Manques / rappels jour</th>
+              <th>Operatrice chargee du rappel</th>
               <th>Duree attente</th>
               <th>Type</th>
               <th>Rappel operatrice</th>
