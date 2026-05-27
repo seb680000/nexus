@@ -45,32 +45,21 @@ function isBlockingCall(row: any) {
   return true;
 }
 
-function operatorOnLineAt(operator: string, at: Date | null, businessRows: any[]) {
-  if (!at) return false;
-  const timestamp = at.getTime();
-  return businessRows.some((row) => {
-    if (!row.time || row.operator !== operator) return false;
-    if (!isBlockingCall(row)) return false;
-    return row.time.getTime() <= timestamp && rowEndTime(row) >= timestamp;
-  });
+function overlapSeconds(startA: number, endA: number, startB: number, endB: number) {
+  return Math.max(0, Math.round((Math.min(endA, endB) - Math.max(startA, startB)) / 1000));
 }
 
-function lastBlockingEndBefore(operator: string, at: Date | null, businessRows: any[]) {
-  if (!at) return null;
-  const timestamp = at.getTime();
-  const lastEnd = businessRows
+function blockedSecondsDuring(operator: string, callStart: number, callEnd: number, businessRows: any[]) {
+  return businessRows
     .filter((row) => row.time && row.operator === operator && isBlockingCall(row))
-    .map(rowEndTime)
-    .filter((endTime) => endTime <= timestamp)
-    .sort((a, b) => b - a)[0];
-
-  return lastEnd || null;
+    .reduce((sum, row) => sum + overlapSeconds(callStart, callEnd, row.time.getTime(), rowEndTime(row)), 0);
 }
 
-function formatAvailableSince(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
+function formatShortDuration(seconds: number) {
+  const safe = Math.max(0, Math.round(seconds));
+  if (safe < 60) return `${safe}s`;
+  const minutes = Math.floor(safe / 60);
+  const remainingSeconds = safe % 60;
   if (minutes < 60) return `${minutes}m${String(remainingSeconds).padStart(2, '0')}`;
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
@@ -78,17 +67,23 @@ function formatAvailableSince(seconds: number) {
 }
 
 function availableOperator(call: CallPath, businessRows: any[]) {
-  const operators = [...new Set(businessRows.map((row) => row.operator).filter(isRealOperator))].sort();
-  const at = call.date?.getTime() || 0;
-  const available = operators
-    .filter((operator) => !operatorOnLineAt(operator, call.date, businessRows))
-    .map((operator) => {
-      const lastEnd = lastBlockingEndBefore(operator, call.date, businessRows);
-      const availableSeconds = lastEnd ? Math.max(0, Math.round((at - lastEnd) / 1000)) : 0;
-      return `${operator} · dispo depuis ${lastEnd ? formatAvailableSince(availableSeconds) : 'début période'}`;
-    });
+  if (!call.date || call.wait <= 0) return 'Non calculable';
 
-  return available.join(', ') || 'Aucune disponible détectée';
+  const callStart = call.date.getTime();
+  const callEnd = callStart + call.wait * 1000;
+  const operators = [...new Set(businessRows.map((row) => row.operator).filter(isRealOperator))].sort();
+
+  const available = operators
+    .map((operator) => {
+      const blocked = blockedSecondsDuring(operator, callStart, callEnd, businessRows);
+      const availableSeconds = Math.max(0, call.wait - blocked);
+      return { operator, availableSeconds };
+    })
+    .filter((item) => item.availableSeconds > 0)
+    .sort((a, b) => b.availableSeconds - a.availableSeconds || a.operator.localeCompare(b.operator))
+    .map((item) => `${item.operator} · dispo ${formatShortDuration(item.availableSeconds)} sans prise`);
+
+  return available.join(', ') || 'Aucune disponible détectée pendant l’appel';
 }
 
 function displayOperator(call: CallPath) {
