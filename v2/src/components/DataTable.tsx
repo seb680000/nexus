@@ -33,6 +33,8 @@ const excludedColumns = [
   'utilisateur',
   'sonde / prise',
   'sondé / prise',
+  'appels manques / rappels jour',
+  'appels manqués / rappels jour',
 ];
 
 function normalize(value: string) {
@@ -123,6 +125,10 @@ function abandonedWaitTone(row: any) {
   return 'valueGood';
 }
 
+function missedRecalledTone(row: any) {
+  return row.allMissedRecalled ? 'valueGood' : 'valueBad';
+}
+
 function missedDayTone(row: any) {
   if (isHandledAbandon(row)) return 'valueGood';
   const count = Number(row.missedDay || 0);
@@ -134,6 +140,7 @@ function missedDayTone(row: any) {
 function customTone(key: string, label: string, row: any) {
   const normalizedLabel = normalize(label);
   if (key === 'wait' && normalizedLabel.includes('attente') && 'waitSec' in row) return abandonedWaitTone(row);
+  if (key === 'missedRecalledDay') return missedRecalledTone(row);
   if (key === 'missedDay') return missedDayTone(row);
   return '';
 }
