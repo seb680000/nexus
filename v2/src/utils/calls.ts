@@ -5,6 +5,8 @@ import { frenchStatus, frenchStep } from './labels';
 
 export const OUTBOUND_MIN_TALK_SECONDS = 20;
 
+const excludedOperatorNames = ['sebastien schmitt', 'sébastien schmitt'];
+
 const blockedNames = [
   'support',
   'voice mail',
@@ -19,6 +21,19 @@ const blockedNames = [
   'shared parking',
   'parking',
 ];
+
+export function normalizeName(value: string) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+export function isRealOperator(value: string) {
+  const normalized = normalizeName(value);
+  return Boolean(value && value !== 'Non identifie' && !excludedOperatorNames.map(normalizeName).includes(normalized));
+}
 
 export function isQueue(row: Row) {
   return row.direction.toLowerCase() === 'inbound queue';
@@ -114,16 +129,19 @@ export function cleanName(raw: string) {
     return '';
   }
 
-  return value
+  const name = value
     .split(',')
     .map((part) => part.trim())
     .filter(Boolean)
     .reverse()
     .join(' ');
+
+  return isRealOperator(name) || !excludedOperatorNames.map(normalizeName).includes(normalizeName(name)) ? name : '';
 }
 
 export function operatorName(value: string) {
-  return /\(\d+\)/.test(value) ? cleanName(value) : '';
+  const name = /\(\d+\)/.test(value) ? cleanName(value) : '';
+  return isRealOperator(name) ? name : '';
 }
 
 export function operatorFromActivity(text: string) {
@@ -131,7 +149,7 @@ export function operatorFromActivity(text: string) {
 
   for (const match of matches.reverse()) {
     const name = cleanName(match[1]);
-    if (name) return name;
+    if (isRealOperator(name)) return name;
   }
 
   return '';
@@ -162,7 +180,7 @@ export function isOperatorBusy(row: Row) {
 }
 
 export function isOperatorProbe(row: Row) {
-  return isInbound(row) && Boolean(row.operator) && !isOperatorBusy(row) && (row.ringing > 0 || isAnswered(row));
+  return isInbound(row) && isRealOperator(row.operator) && !isOperatorBusy(row) && (row.ringing > 0 || isAnswered(row));
 }
 
 export function groupBy<T>(items: T[], selector: (item: T) => string) {
@@ -181,6 +199,7 @@ export function mapRows(rawRows: Record<string, string>[], parseDate: (value: st
     .map((raw, index) => {
       const time = parseDate(raw['Call Time']);
       const activity = String(raw['Call Activity Details'] || '').trim();
+      const operator = operatorName(raw.To) || operatorName(raw.From) || operatorFromActivity(activity);
 
       return {
         id: `${index}-${raw['Call ID'] || ''}`,
@@ -196,7 +215,7 @@ export function mapRows(rawRows: Record<string, string>[], parseDate: (value: st
         talking: secondsFromDuration(raw.Talking),
         client: clientFrom(raw),
         phone: phoneFrom(raw.From) || phoneFrom(activity),
-        operator: operatorName(raw.To) || operatorName(raw.From) || operatorFromActivity(activity),
+        operator: isRealOperator(operator) ? operator : '',
         activity,
       };
     })
@@ -208,12 +227,12 @@ function usefulHumanRowsAfterParking(sorted: Row[]) {
   if (lastParkingStorageIndex < 0) return [];
 
   return sorted.slice(lastParkingStorageIndex + 1).filter((row) => {
-    return isInbound(row) && isAnswered(row) && row.operator && !isParkingStorage(row) && !isSystemOrSupportStep(row) && row.talking > 0;
+    return isInbound(row) && isAnswered(row) && isRealOperator(row.operator) && !isParkingStorage(row) && !isSystemOrSupportStep(row) && row.talking > 0;
   });
 }
 
 function finalOperatorAfterParking(sorted: Row[]) {
-  return usefulHumanRowsAfterParking(sorted).map((row) => row.operator).find(Boolean) || '';
+  return usefulHumanRowsAfterParking(sorted).map((row) => row.operator).find(isRealOperator) || '';
 }
 
 function hasUsefulHumanAnswerAfterLastParking(sorted: Row[]) {
@@ -258,16 +277,16 @@ export function buildCalls(rows: Row[]) {
 
     if (!queueRows.length) continue;
 
-    const answeredRows = sorted.filter((row) => isInbound(row) && isAnswered(row));
+    const answeredRows = sorted.filter((row) => isInbound(row) && isAnswered(row) && isRealOperator(row.operator));
     const hasParking = sorted.some(isParkingStorage) || sorted.some(isParkingTransfer);
     const parkedLost = isLostWhileParked(sorted);
     const parkingOperator = hasParking ? finalOperatorAfterParking(sorted) : '';
     const normalOperator =
-      answeredRows.map((row) => row.operator).find(Boolean) ||
-      sorted.map((row) => row.operator).find(Boolean) ||
+      answeredRows.map((row) => row.operator).find(isRealOperator) ||
+      sorted.map((row) => row.operator).find(isRealOperator) ||
       operatorFromActivity(sorted.map((row) => row.activity).join(' ')) ||
       'Non identifie';
-    const operator = parkingOperator || normalOperator;
+    const operator = isRealOperator(parkingOperator) ? parkingOperator : isRealOperator(normalOperator) ? normalOperator : 'Non identifie';
 
     const treated = hasParking ? Boolean(parkingOperator) && !parkedLost : queueRows.some(isWaiting);
     const abandoned = parkedLost || (!treated && queueRows.some(isUnanswered));
@@ -301,7 +320,7 @@ export function buildCalls(rows: Row[]) {
 
 export function callDetails(calls: CallPath[]): DetailItem[] {
   return calls.flatMap((call) => {
-    const base = { client: call.client, operator: call.operator, phone: call.phone };
+    const base = { client: call.client, operator: isRealOperator(call.operator) ? call.operator : 'Non identifie', phone: call.phone };
     const hasParking = call.rows.some(isParkingStorage) || call.rows.some(isParkingTransfer);
     const lostWhileParked = hasParking && call.abandoned && !call.treated;
     const parkingRows = call.rows.filter((row) => isParkingStorage(row) || isParkingTransfer(row));
@@ -362,12 +381,12 @@ export function callDetails(calls: CallPath[]): DetailItem[] {
 
 export function outboundDetails(rows: Row[]): DetailItem[] {
   return rows
-    .filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS)
+    .filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS && isRealOperator(row.operator))
     .map((row) => ({
       id: row.id,
       date: frDateTime(row.time),
       client: row.client,
-      operator: row.operator || 'Non identifie',
+      operator: row.operator,
       phone: row.phone,
       step: frenchStep('Outbound'),
       status: frenchStatus(row.status),
@@ -389,10 +408,10 @@ export function getOperatorCallback(call: CallPath, outboundRows: Row[], minCall
   const afterCallEnd = callEndTimestamp(call);
 
   const found = outboundRows.find(
-    (row) => row.callId !== call.callId && row.phone === call.phone && row.time && row.time.getTime() > afterCallEnd && row.talking >= minCallback
+    (row) => row.callId !== call.callId && row.phone === call.phone && row.time && row.time.getTime() > afterCallEnd && row.talking >= minCallback && isRealOperator(row.operator)
   );
 
-  return found ? { operator: found.operator || 'Non identifie', time: found.time, duration: found.talking } : null;
+  return found ? { operator: found.operator, time: found.time, duration: found.talking } : null;
 }
 
 export function getUserCallback(call: CallPath, allRows: Row[], minUserCallback: number): CallbackInfo {
@@ -410,7 +429,7 @@ export function getUserCallback(call: CallPath, allRows: Row[], minUserCallback:
       row.talking >= minUserCallback
   );
 
-  return found ? { operator: found.operator || 'Non identifie', time: found.time, duration: found.talking } : null;
+  return found ? { operator: isRealOperator(found.operator) ? found.operator : 'Non identifie', time: found.time, duration: found.talking } : null;
 }
 
 export function statusForAbandon(call: CallPath, operatorCallback: CallbackInfo, userCallback: CallbackInfo) {
@@ -426,11 +445,11 @@ export function statusForAbandon(call: CallPath, operatorCallback: CallbackInfo,
 }
 
 export function summarize(calls: CallPath[], rawRows: Row[], callback: CallbackSettings) {
-  const treated = calls.filter((call) => call.treated);
+  const treated = calls.filter((call) => call.treated && isRealOperator(call.operator));
   const abandoned = calls.filter((call) => call.abandoned);
   const total = treated.length + abandoned.length;
   const business = rawRows.filter((row) => inBusinessHours(row.time));
-  const outboundRows = business.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS);
+  const outboundRows = business.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= OUTBOUND_MIN_TALK_SECONDS && isRealOperator(row.operator));
   const eligible = abandoned.filter(
     (call) => callback.families.includes(call.service) && call.wait > callback.minAbandon
   );
@@ -460,7 +479,7 @@ export function summarize(calls: CallPath[], rawRows: Row[], callback: CallbackS
     abandonedOver5: abandonedOver5.length,
     premiumOver5: abandonedOver5.filter((call) => call.service === 'premium').length,
     forfaitOver5: abandonedOver5.filter((call) => call.service === 'forfait').length,
-    internal: business.filter((row) => isInternal(row) && isAnswered(row)).length,
+    internal: business.filter((row) => isInternal(row) && isAnswered(row) && isRealOperator(row.operator)).length,
     outbound: outboundRows.length,
     outboundRows,
     operatorCallbacks,
@@ -490,7 +509,7 @@ export function buildOperatorAnalysis(calls: CallPath[]) {
   const probesByOperator = new Map<string, Set<string>>();
 
   for (const call of calls) {
-    if (call.treated && call.operator && call.operator !== 'Non identifie') {
+    if (call.treated && isRealOperator(call.operator)) {
       takenByOperator.set(call.operator, [...(takenByOperator.get(call.operator) || []), call]);
     }
 
