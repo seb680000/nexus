@@ -28,19 +28,41 @@ function dayFromDateLabel(value: string) {
   return String(value || '').slice(0, 8);
 }
 
+function normalized(value: string) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function hasRecall(row: AbandonedReportRow) {
+  const operatorCallback = normalized(row.operatorCallback);
+  const userCallback = normalized(row.userCallback);
+  return !operatorCallback.includes('aucun rappel operatrice trouve') || !userCallback.includes('aucun rappel entrant ulterieur detecte');
+}
+
 function buildMissedDayRows(rows: AbandonedReportRow[]) {
-  const counts = new Map<string, number>();
+  const missedCounts = new Map<string, number>();
+  const recallCounts = new Map<string, number>();
 
   for (const row of rows) {
     const key = `${dayFromDateLabel(row.date)}__${row.label}`;
-    counts.set(key, (counts.get(key) || 0) + 1);
+    missedCounts.set(key, (missedCounts.get(key) || 0) + 1);
+    if (hasRecall(row)) {
+      recallCounts.set(key, (recallCounts.get(key) || 0) + 1);
+    }
   }
 
   return rows.map((row) => {
     const key = `${dayFromDateLabel(row.date)}__${row.label}`;
+    const missedDay = missedCounts.get(key) || 1;
+    const recalledDay = recallCounts.get(key) || 0;
     return {
       ...row,
-      missedDay: counts.get(key) || 1,
+      missedDay,
+      recalledDay,
+      missedRecalledDay: `${missedDay} / ${recalledDay}`,
+      allMissedRecalled: recalledDay >= missedDay,
     };
   });
 }
@@ -109,7 +131,7 @@ export function AbandonedView({
           ['status', 'Statut'],
           ['date', 'Date / heure appel'],
           ['label', 'Client'],
-          ['missedDay', 'Appels manqués jour'],
+          ['missedRecalledDay', 'Appels manqués / rappels jour'],
           ['phone', 'Telephone'],
           ['service', 'Famille'],
           ['wait', 'Attente'],
