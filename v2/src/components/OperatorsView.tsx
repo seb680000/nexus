@@ -34,6 +34,9 @@ type ScorePart = {
   score: number;
   weight: number;
   reason: string;
+  formula: string;
+  source: string;
+  interpretation: string;
 };
 
 function rowEndTime(row: Row) {
@@ -129,7 +132,7 @@ function operatorCallbackCount(rows: Row[], operator: string) {
 }
 
 function sentimentExplanation(parts: ScorePart[], finalScore: number) {
-  const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.reason}`);
+  const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.formula} · ${part.source}`);
   return `Sentiment IA final : ${finalScore.toFixed(1)}/10\n${lines.join('\n')}`;
 }
 
@@ -154,20 +157,29 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       label: 'Qualité de prise',
       score: ratioScore(priseRate),
       weight: 0.18,
-      reason: `${raw.inbound} appels pris sur ${raw.probes} sollicitations. Le volume brut ne suffit pas, le taux de prise est utilisé.`,
+      formula: 'Formule : appels entrants traités / opératrice sondée × 10.',
+      source: `Données : ${raw.inbound} entrants traités / ${raw.probes} sollicitations = ${pct(raw.inbound, raw.probes)}.`,
+      interpretation: 'Mesure la capacité à prendre les appels quand 3CX sollicite l’opératrice. Le volume brut n’est pas utilisé seul.',
+      reason: `${raw.inbound} appels pris sur ${raw.probes} sollicitations.`,
     },
     {
       key: 'abandonsScore',
       label: 'Abandons imputables',
       score: clamp(10 - abandonPressure * 10),
       weight: 0.14,
-      reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période. Moins il y en a, meilleure est l’appréciation.`,
+      formula: 'Formule : 10 - (abandons imputables / sollicitations × 10).',
+      source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.probes} sollicitations.`,
+      interpretation: 'Pénalise les pertes quand l’opératrice était disponible ou en appel interne pendant l’appel abandonné.',
+      reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période.`,
     },
     {
       key: 'attenteScore',
       label: 'Attente moyenne',
       score: lowerIsBetter(raw.waitAvg, teamWait),
       weight: 0.12,
+      formula: 'Formule : comparaison de l’attente moyenne opératrice avec la médiane équipe. Plus bas que la médiane = meilleur score.',
+      source: `Données : opératrice ${formatClock(raw.waitAvg)} / médiane équipe ${formatClock(teamWait)}.`,
+      interpretation: 'Mesure la rapidité de traitement relative à l’équipe, sans comparer directement les volumes horaires.',
       reason: `Attente moyenne ${formatClock(raw.waitAvg)} comparée à la médiane équipe ${formatClock(teamWait)}.`,
     },
     {
@@ -175,34 +187,49 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       label: 'Parole moyenne',
       score: lowerIsBetter(Math.abs(raw.talkAvg - teamTalk), teamTalk || raw.talkAvg || 1),
       weight: 0.10,
-      reason: `Parole moyenne ${formatClock(raw.talkAvg)} comparée à la médiane équipe ${formatClock(teamTalk)}. L’objectif est l’efficacité sans conversation anormalement longue.`,
+      formula: 'Formule : écart entre parole moyenne opératrice et médiane équipe. Plus l’écart est maîtrisé = meilleur score.',
+      source: `Données : opératrice ${formatClock(raw.talkAvg)} / médiane équipe ${formatClock(teamTalk)}.`,
+      interpretation: 'Valorise une durée de conversation cohérente : ni trop expéditive, ni anormalement longue.',
+      reason: `Parole moyenne ${formatClock(raw.talkAvg)} comparée à la médiane équipe ${formatClock(teamTalk)}.`,
     },
     {
       key: 'parkingScore',
       label: 'Effort parking',
       score: higherIsBetter(parkingEffort, teamParking),
       weight: 0.15,
-      reason: `${raw.handledParking} appel(s) avec usage parking. Ce critère valorise l’effort de mise en parking quand le traitement immédiat n’est pas possible.`,
+      formula: 'Formule : ratio appels avec parking / entrants traités, comparé à la médiane équipe. Plus haut = meilleur score.',
+      source: `Données : ${raw.handledParking} parking(s) / ${raw.inbound} entrants traités. Médiane équipe : ${Math.round(teamParking * 100)}%.`,
+      interpretation: 'Valorise les opératrices qui mettent en parking au lieu de perdre l’appel quand un transfert immédiat n’est pas possible.',
+      reason: `${raw.handledParking} appel(s) avec usage parking.`,
     },
     {
       key: 'repriseParkingScore',
       label: 'Reprise après parking',
       score: higherIsBetter(parkingPickupEffort, teamParking),
       weight: 0.10,
-      reason: `${raw.parkingPickup} appel(s) repris ou finalisés après parking. Ce critère valorise la récupération utile d’un appel parqué.`,
+      formula: 'Formule : appels repris ou finalisés après parking / entrants traités, comparé à la médiane parking équipe.',
+      source: `Données : ${raw.parkingPickup} reprise(s) parking / ${raw.inbound} entrants traités.`,
+      interpretation: 'Valorise la récupération utile d’un appel parqué, pas seulement le fait de le mettre en attente.',
+      reason: `${raw.parkingPickup} appel(s) repris ou finalisés après parking.`,
     },
     {
       key: 'rappelScore',
       label: 'Effort de rappel',
       score: higherIsBetter(callbackEffort, teamCallback),
       weight: 0.14,
-      reason: `${raw.callbackOutbounds} rappel(s) ou sortant(s) utiles détectés. Les rappels sont valorisés car ils réduisent la perte client.`,
+      formula: 'Formule : rappels ou sortants utiles / entrants traités, comparé à la médiane équipe.',
+      source: `Données : ${raw.callbackOutbounds} rappel(s) utiles / ${raw.inbound} entrants traités. Médiane équipe : ${Math.round(teamCallback * 100)}%.`,
+      interpretation: 'Valorise l’effort de rappel car il récupère des opportunités perdues et améliore le service client.',
+      reason: `${raw.callbackOutbounds} rappel(s) ou sortant(s) utiles détectés.`,
     },
     {
       key: 'sortantsScore',
       label: 'Sortants utiles',
       score: higherIsBetter(outboundEffort, teamOutbound),
       weight: 0.08,
+      formula: 'Formule : sortants clients utiles / entrants traités, comparé à la médiane équipe.',
+      source: `Données : ${raw.outbound} sortant(s) client >= 20 sec / ${raw.inbound} entrants traités.`,
+      interpretation: 'Valorise les appels sortants réels sans surpondérer ce critère.',
       reason: `${raw.outbound} appel(s) sortant(s) client de 20 secondes ou plus.`,
     },
     {
@@ -210,18 +237,24 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
       label: 'Activité relative',
       score: higherIsBetter(raw.totalWorkSeconds, teamActivity),
       weight: 0.09,
-      reason: `Temps utile ${formatClock(raw.totalWorkSeconds)} comparé à la médiane équipe ${formatClock(teamActivity)}. Le poids reste faible pour ne pas pénaliser les plannings plus courts.`,
+      formula: 'Formule : temps utile opératrice comparé à la médiane équipe. Poids faible pour limiter l’effet planning.',
+      source: `Données : opératrice ${formatClock(raw.totalWorkSeconds)} / médiane équipe ${formatClock(teamActivity)}.`,
+      interpretation: 'Tient compte de l’activité réelle, mais ne pénalise pas fortement les plannings courts ou les plages moins chargées.',
+      reason: `Temps utile ${formatClock(raw.totalWorkSeconds)} comparé à la médiane équipe ${formatClock(teamActivity)}.`,
     },
   ];
 
   const finalScore = clamp(parts.reduce((sum, part) => sum + part.score * part.weight, 0));
   const partMap = Object.fromEntries(parts.map((part) => [part.key, formatScore(part.score)]));
+  const methodMap = Object.fromEntries(parts.map((part) => [`${part.key}Method`, `${part.label}\nPoids : ${Math.round(part.weight * 100)}%\n${part.formula}\n${part.source}\n${part.interpretation}`]));
 
   return {
     sentiment: formatScore(finalScore),
     sentimentValue: finalScore,
     sentimentDetail: sentimentExplanation(parts, finalScore),
+    sentimentMethod: `Sentiment IA = somme des sous-notes pondérées.\n${parts.map((part) => `${part.label} ${part.score.toFixed(1)} × ${Math.round(part.weight * 100)}%`).join('\n')}\nRésultat : ${finalScore.toFixed(1)}/10.`,
     ...partMap,
+    ...methodMap,
   };
 }
 
@@ -229,12 +262,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
   const { takenByOperator, probesByOperator } = buildOperatorAnalysis(calls);
   const outboundRows = rows.filter((row) => isOutbound(row) && isAnswered(row) && row.talking >= 20 && row.operator && row.operator !== 'Non identifie');
   const internalRows = rows.filter((row) => isInternal(row) && isAnswered(row) && row.operator && row.operator !== 'Non identifie');
-  const names = [...new Set([
-    ...takenByOperator.keys(),
-    ...probesByOperator.keys(),
-    ...outboundRows.map((row) => row.operator),
-    ...internalRows.map((row) => row.operator),
-  ])].sort();
+  const names = [...new Set([...takenByOperator.keys(), ...probesByOperator.keys(), ...outboundRows.map((row) => row.operator), ...internalRows.map((row) => row.operator)])].sort();
 
   const rawData: OperatorRawScore[] = names.map((operator) => {
     const inboundCalls = takenByOperator.get(operator) || [];
@@ -301,15 +329,25 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
       label: raw.operator,
       sentiment: sentiment.sentiment,
       sentimentValue: sentiment.sentimentValue,
+      sentimentMethod: sentiment.sentimentMethod,
       priseScore: sentiment.priseScore,
+      priseScoreMethod: sentiment.priseScoreMethod,
       abandonsScore: sentiment.abandonsScore,
+      abandonsScoreMethod: sentiment.abandonsScoreMethod,
       attenteScore: sentiment.attenteScore,
+      attenteScoreMethod: sentiment.attenteScoreMethod,
       paroleScore: sentiment.paroleScore,
+      paroleScoreMethod: sentiment.paroleScoreMethod,
       parkingScore: sentiment.parkingScore,
+      parkingScoreMethod: sentiment.parkingScoreMethod,
       repriseParkingScore: sentiment.repriseParkingScore,
+      repriseParkingScoreMethod: sentiment.repriseParkingScoreMethod,
       rappelScore: sentiment.rappelScore,
+      rappelScoreMethod: sentiment.rappelScoreMethod,
       sortantsScore: sentiment.sortantsScore,
+      sortantsScoreMethod: sentiment.sortantsScoreMethod,
       activiteScore: sentiment.activiteScore,
+      activiteScoreMethod: sentiment.activiteScoreMethod,
       sentimentDetail: sentiment.sentimentDetail,
       details: raw.details,
     };
