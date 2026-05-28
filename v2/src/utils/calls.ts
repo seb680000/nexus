@@ -5,7 +5,13 @@ import { frenchStatus, frenchStep } from './labels';
 
 export const OUTBOUND_MIN_TALK_SECONDS = 20;
 
-const excludedOperatorNames = ['sebastien schmitt', 'sébastien schmitt', 'domaine la clairiere', 'domaine la clairière'];
+const excludedOperatorNames = [
+  'sebastien schmitt',
+  'sébastien schmitt',
+  'domaine la clairiere',
+  'domaine la clairière',
+  'caroline amidieu',
+];
 
 const blockedNames = [
   'support',
@@ -22,7 +28,10 @@ const blockedNames = [
   'parking',
   'domaine la clairiere',
   'domaine la clairière',
+  'caroline amidieu',
 ];
+
+const normalizedExcludedOperatorNames = excludedOperatorNames.map((name) => normalizeName(name));
 
 export function normalizeName(value: string) {
   return String(value || '')
@@ -34,7 +43,7 @@ export function normalizeName(value: string) {
 
 export function isRealOperator(value: string) {
   const normalized = normalizeName(value);
-  return Boolean(value && value !== 'Non identifie' && !excludedOperatorNames.map(normalizeName).includes(normalized));
+  return Boolean(value && value !== 'Non identifie' && !normalizedExcludedOperatorNames.includes(normalized));
 }
 
 export function isQueue(row: Row) {
@@ -138,7 +147,7 @@ export function cleanName(raw: string) {
     .reverse()
     .join(' ');
 
-  return isRealOperator(name) || !excludedOperatorNames.map(normalizeName).includes(normalizeName(name)) ? name : '';
+  return isRealOperator(name) ? name : '';
 }
 
 export function operatorName(value: string) {
