@@ -8,11 +8,15 @@ type OperatorsViewProps = { calls: CallPath[]; rows: Row[]; setDetail: (rows: De
 type OperatorRawScore = {
   operator: string; inbound: number; outbound: number; probes: number; availableOpportunities: number; availableTakes: number;
   linkedAbandons: number; handledParking: number; parkingPickup: number; callbackOutbounds: number;
-  waitAvg: number; talkAvg: number; internalSeconds: number; totalWorkSeconds: number; present: boolean;
-  details: DetailItem[]; inboundCalls: CallPath[]; outgoing: Row[];
+  waitAvg: number; talkAvg: number; internalSeconds: number; totalWorkSeconds: number; presenceSeconds: number; present: boolean;
+  details: DetailItem[]; inboundCalls: CallPath[]; outgoing: Row[]; presenceIntervals: Interval[];
 };
 type ScorePart = { label: string; key: string; score: number; weight: number; formula: string; source: string; interpretation: string; reason: string };
 type Interval = { start: number; end: number };
+
+const PRESENCE_GAP_MS = 60 * 60 * 1000;
+const PRESENCE_MARGIN_BEFORE_MS = 5 * 60 * 1000;
+const PRESENCE_MARGIN_AFTER_MS = 10 * 60 * 1000;
 
 function rowEndTime(row: Row) {
   const duration = Math.max(row.talking, row.ringing, 1);
@@ -20,12 +24,72 @@ function rowEndTime(row: Row) {
 }
 function rangesOverlap(startA: number, endA: number, startB: number, endB: number) { return startA < endB && startB < endA; }
 function isClientBlockingCall(row: Row) { return !isInternal(row) && (isInbound(row) || isOutbound(row)) && isAnswered(row) && row.talking > 0; }
+function callInterval(call: CallPath): Interval | null {
+  if (!call.date) return null;
+  const duration = Math.max(call.wait + call.talk, call.wait, call.talk, 1);
+  const start = call.date.getTime();
+  return { start, end: start + duration * 1000 };
+}
+function rowInterval(row: Row): Interval | null {
+  if (!row.time) return null;
+  const start = row.time.getTime();
+  const end = rowEndTime(row);
+  return end > start ? { start, end } : null;
+}
+function isPresenceActivityRow(row: Row, operator: string) {
+  return row.operator === operator && (isInbound(row) || isOutbound(row) || isInternal(row)) && (isAnswered(row) || row.talking > 0 || row.ringing > 0);
+}
+function mergedDurationSeconds(intervals: Interval[]) {
+  const sorted = intervals.filter((item) => item.end > item.start).sort((a, b) => a.start - b.start || a.end - b.end);
+  if (!sorted.length) return 0;
+  const merged: Interval[] = [];
+  for (const interval of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || interval.start > last.end) merged.push({ ...interval });
+    else last.end = Math.max(last.end, interval.end);
+  }
+  return Math.round(merged.reduce((sum, interval) => sum + interval.end - interval.start, 0) / 1000);
+}
+function buildPresenceIntervals(operator: string, operatorRows: Row[], inboundCalls: CallPath[]) {
+  const rawIntervals = [
+    ...operatorRows.filter((row) => isPresenceActivityRow(row, operator)).map(rowInterval),
+    ...inboundCalls.map(callInterval),
+  ].filter((value): value is Interval => Boolean(value)).sort((a, b) => a.start - b.start || a.end - b.end);
+
+  if (!rawIntervals.length) return [];
+
+  const sessions: Interval[] = [];
+  let current: Interval = {
+    start: Math.max(0, rawIntervals[0].start - PRESENCE_MARGIN_BEFORE_MS),
+    end: rawIntervals[0].end + PRESENCE_MARGIN_AFTER_MS,
+  };
+
+  for (const interval of rawIntervals.slice(1)) {
+    const expandedStart = Math.max(0, interval.start - PRESENCE_MARGIN_BEFORE_MS);
+    const expandedEnd = interval.end + PRESENCE_MARGIN_AFTER_MS;
+    if (expandedStart - current.end <= PRESENCE_GAP_MS) {
+      current.end = Math.max(current.end, expandedEnd);
+    } else {
+      sessions.push(current);
+      current = { start: expandedStart, end: expandedEnd };
+    }
+  }
+  sessions.push(current);
+  return sessions;
+}
+function isInsidePresence(at: Date | null, presenceIntervals: Interval[]) {
+  if (!at) return false;
+  const timestamp = at.getTime();
+  return presenceIntervals.some((interval) => timestamp >= interval.start && timestamp <= interval.end);
+}
 function operatorBusyAt(operator: string, at: Date | null, rows: Row[]) {
   if (!at) return false;
   const timestamp = at.getTime();
   return rows.some((row) => row.time && row.operator === operator && isClientBlockingCall(row) && row.time.getTime() <= timestamp && rowEndTime(row) >= timestamp);
 }
-function operatorAvailableAt(call: CallPath, operator: string, rows: Row[]) { return Boolean(call.date) && !operatorBusyAt(operator, call.date, rows); }
+function operatorAvailableAt(call: CallPath, operator: string, rows: Row[], presenceIntervals: Interval[]) {
+  return isInsidePresence(call.date, presenceIntervals) && !operatorBusyAt(operator, call.date, rows);
+}
 function operatorBusyDuring(call: CallPath, operator: string, rows: Row[]) {
   if (!call.date) return false;
   const start = call.date.getTime();
@@ -38,8 +102,8 @@ function operatorInternalDuring(call: CallPath, operator: string, rows: Row[]) {
   const end = start + Math.max(call.wait, 1) * 1000;
   return rows.some((row) => row.time && row.operator === operator && isInternal(row) && rangesOverlap(start, end, row.time.getTime(), rowEndTime(row)));
 }
-function abandonLinkedToOperator(call: CallPath, operator: string, rows: Row[]) {
-  if (!call.abandoned) return false;
+function abandonLinkedToOperator(call: CallPath, operator: string, rows: Row[], presenceIntervals: Interval[]) {
+  if (!call.abandoned || !isInsidePresence(call.date, presenceIntervals)) return false;
   if (operatorInternalDuring(call, operator, rows)) return true;
   return !operatorBusyDuring(call, operator, rows);
 }
@@ -63,41 +127,18 @@ function formatScore(value: number) { return `${clamp(value).toFixed(1)}/10`; }
 function operatorParkingCount(calls: CallPath[], operator: string) { return calls.filter((call) => call.rows.some((row) => row.operator === operator && /parking|shared parking|sp\d+/i.test(`${row.to} ${row.from} ${row.activity}`))).length; }
 function operatorParkingPickupCount(calls: CallPath[], operator: string) { return calls.filter((call) => call.treated && call.operator === operator && call.rows.some((row) => /parking|shared parking|sp\d+/i.test(`${row.to} ${row.from} ${row.activity}`))).length; }
 function operatorCallbackCount(rows: Row[], operator: string) { return rows.filter((row) => row.operator === operator && isOutbound(row) && isAnswered(row) && row.talking >= 20).length; }
-function availableOpportunities(calls: CallPath[], operator: string, rows: Row[]) { return calls.filter((call) => operatorAvailableAt(call, operator, rows)).length; }
-function availableTakes(calls: CallPath[], operator: string, rows: Row[]) { return calls.filter((call) => call.treated && call.operator === operator && operatorAvailableAt(call, operator, rows)).length; }
-function callInterval(call: CallPath): Interval | null {
-  if (!call.date) return null;
-  const duration = Math.max(call.wait + call.talk, call.wait, call.talk, 1);
-  const start = call.date.getTime();
-  return { start, end: start + duration * 1000 };
-}
-function rowInterval(row: Row): Interval | null {
-  if (!row.time) return null;
-  const start = row.time.getTime();
-  const end = rowEndTime(row);
-  return end > start ? { start, end } : null;
-}
-function mergedDurationSeconds(intervals: Interval[]) {
-  const sorted = intervals.filter((item) => item.end > item.start).sort((a, b) => a.start - b.start || a.end - b.end);
-  if (!sorted.length) return 0;
-  const merged: Interval[] = [];
-  for (const interval of sorted) {
-    const last = merged[merged.length - 1];
-    if (!last || interval.start > last.end) merged.push({ ...interval });
-    else last.end = Math.max(last.end, interval.end);
-  }
-  return Math.round(merged.reduce((sum, interval) => sum + interval.end - interval.start, 0) / 1000);
-}
+function availableOpportunities(calls: CallPath[], operator: string, rows: Row[], presenceIntervals: Interval[]) { return calls.filter((call) => operatorAvailableAt(call, operator, rows, presenceIntervals)).length; }
+function availableTakes(calls: CallPath[], operator: string, rows: Row[], presenceIntervals: Interval[]) { return calls.filter((call) => call.treated && call.operator === operator && operatorAvailableAt(call, operator, rows, presenceIntervals)).length; }
 function totalOperatorActivitySeconds(operator: string, operatorRows: Row[], inboundCalls: CallPath[]) {
   const rowIntervals = operatorRows
-    .filter((row) => row.operator === operator && (isInbound(row) || isOutbound(row) || isInternal(row)) && (isAnswered(row) || row.talking > 0 || row.ringing > 0))
+    .filter((row) => isPresenceActivityRow(row, operator))
     .map(rowInterval)
     .filter((value): value is Interval => Boolean(value));
   const callIntervals = inboundCalls.map(callInterval).filter((value): value is Interval => Boolean(value));
   return mergedDurationSeconds([...rowIntervals, ...callIntervals]);
 }
 function hasRealPresence(raw: Omit<OperatorRawScore, 'present'>) {
-  return raw.totalWorkSeconds > 0 || raw.inbound > 0 || raw.outbound > 0 || raw.handledParking > 0 || raw.parkingPickup > 0 || raw.callbackOutbounds > 0 || raw.internalSeconds > 0;
+  return raw.presenceSeconds > 0 || raw.totalWorkSeconds > 0 || raw.inbound > 0 || raw.outbound > 0 || raw.handledParking > 0 || raw.parkingPickup > 0 || raw.callbackOutbounds > 0 || raw.internalSeconds > 0;
 }
 function sentimentExplanation(parts: ScorePart[], finalScore: number) {
   const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.formula} · ${part.source}`);
@@ -124,8 +165,8 @@ function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
   const teamOutbound = median(activeTeam.map((item) => (item.inbound ? item.outbound / item.inbound : 0)));
   const teamActivity = median(activeTeam.map((item) => item.totalWorkSeconds).filter(Boolean));
   const parts: ScorePart[] = [
-    { key: 'priseScore', label: 'Prise sur disponibilité', score: ratioScore(availablePickupRate), weight: 0.22, formula: 'Formule : appels pris quand l’opératrice était disponible / appels entrants où elle était disponible × 10.', source: `Données : ${raw.availableTakes} prises disponibles / ${raw.availableOpportunities} opportunités disponibles = ${pct(raw.availableTakes, raw.availableOpportunities)}.`, interpretation: 'Mesure la vraie réactivité : les appels internes ne bloquent pas, les appels clients déjà en cours bloquent.', reason: `${raw.availableTakes} appels pris sur ${raw.availableOpportunities} appels où l’opératrice était disponible.` },
-    { key: 'abandonsScore', label: 'Abandons pendant disponibilité', score: clamp(10 - abandonPressure * 10), weight: 0.14, formula: 'Formule : 10 - (abandons imputables / opportunités disponibles × 10).', source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.availableOpportunities} opportunités disponibles.`, interpretation: 'Pénalise les abandons quand l’opératrice était disponible ou seulement en appel interne.', reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période.` },
+    { key: 'priseScore', label: 'Prise sur disponibilité', score: ratioScore(availablePickupRate), weight: 0.22, formula: 'Formule : appels pris quand l’opératrice était présente et disponible / appels entrants sur ses plages de présence où elle était disponible × 10.', source: `Données : ${raw.availableTakes} prises disponibles / ${raw.availableOpportunities} opportunités sur présence = ${pct(raw.availableTakes, raw.availableOpportunities)}.`, interpretation: 'Début de poste, pauses longues et fin de journée sont exclus grâce aux plages de présence déduites de l’activité 3CX.', reason: `${raw.availableTakes} appels pris sur ${raw.availableOpportunities} appels pendant ses plages de présence disponible.` },
+    { key: 'abandonsScore', label: 'Abandons pendant disponibilité', score: clamp(10 - abandonPressure * 10), weight: 0.14, formula: 'Formule : 10 - (abandons imputables pendant présence / opportunités disponibles pendant présence × 10).', source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.availableOpportunities} opportunités sur présence.`, interpretation: 'Pénalise uniquement les abandons lorsque l’opératrice était réellement en plage de présence.', reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période.` },
     { key: 'attenteScore', label: 'Attente moyenne', score: lowerIsBetter(raw.waitAvg, teamWait), weight: 0.11, formula: 'Formule : comparaison de l’attente moyenne opératrice avec la médiane équipe. Plus bas que la médiane = meilleur score.', source: `Données : opératrice ${formatClock(raw.waitAvg)} / médiane équipe ${formatClock(teamWait)}.`, interpretation: 'Mesure la rapidité de traitement relative à l’équipe, sans comparer directement les volumes horaires.', reason: `Attente moyenne ${formatClock(raw.waitAvg)} comparée à la médiane équipe ${formatClock(teamWait)}.` },
     { key: 'paroleScore', label: 'Parole moyenne', score: lowerIsBetter(raw.talkAvg, teamTalk), weight: 0.09, formula: 'Formule : comparaison de la parole moyenne opératrice avec la médiane équipe. Plus court = meilleur score.', source: `Données : opératrice ${formatClock(raw.talkAvg)} / médiane équipe ${formatClock(teamTalk)}.`, interpretation: 'Valorise les conversations efficaces : plus le temps moyen est court, mieux le critère contribue au Sentiment IA.', reason: `Parole moyenne ${formatClock(raw.talkAvg)} comparée à la médiane équipe ${formatClock(teamTalk)}.` },
     { key: 'parkingScore', label: 'Effort parking', score: higherIsBetter(parkingEffort, teamParking), weight: 0.13, formula: 'Formule : ratio appels avec parking / entrants traités, comparé à la médiane équipe. Plus haut = meilleur score.', source: `Données : ${raw.handledParking} parking(s) / ${raw.inbound} entrants traités. Médiane équipe : ${Math.round(teamParking * 100)}%.`, interpretation: 'Valorise les opératrices qui mettent en parking au lieu de perdre l’appel quand un transfert immédiat n’est pas possible.', reason: `${raw.handledParking} appel(s) avec usage parking.` },
@@ -158,12 +199,14 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
     const handledParking = operatorParkingCount(calls, operator);
     const parkingPickup = operatorParkingPickupCount(calls, operator);
     const callbackOutbounds = operatorCallbackCount(rows, operator);
+    const presenceIntervals = buildPresenceIntervals(operator, rows, inboundCalls);
+    const presenceSeconds = mergedDurationSeconds(presenceIntervals);
     const totalWorkSeconds = totalOperatorActivitySeconds(operator, rows, inboundCalls);
-    const baseRaw = { operator, inbound: inboundCalls.length, outbound: outgoing.length, probes, availableOpportunities: 0, availableTakes: 0, linkedAbandons: 0, handledParking, parkingPickup, callbackOutbounds, waitAvg: inboundCalls.length ? waitSeconds / inboundCalls.length : 0, talkAvg: inboundCalls.length + outgoing.length ? talkSeconds / (inboundCalls.length + outgoing.length) : 0, internalSeconds, totalWorkSeconds, details: uniqueDetails(inboundCalls, outgoing), inboundCalls, outgoing };
+    const baseRaw = { operator, inbound: inboundCalls.length, outbound: outgoing.length, probes, availableOpportunities: 0, availableTakes: 0, linkedAbandons: 0, handledParking, parkingPickup, callbackOutbounds, waitAvg: inboundCalls.length ? waitSeconds / inboundCalls.length : 0, talkAvg: inboundCalls.length + outgoing.length ? talkSeconds / (inboundCalls.length + outgoing.length) : 0, internalSeconds, totalWorkSeconds, presenceSeconds, presenceIntervals, details: uniqueDetails(inboundCalls, outgoing), inboundCalls, outgoing };
     const present = hasRealPresence(baseRaw);
-    const opportunities = present ? availableOpportunities(calls, operator, rows) : 0;
-    const takes = present ? availableTakes(calls, operator, rows) : 0;
-    const linkedAbandons = present ? calls.filter((call) => abandonLinkedToOperator(call, operator, rows)) : [];
+    const opportunities = present ? availableOpportunities(calls, operator, rows, presenceIntervals) : 0;
+    const takes = present ? availableTakes(calls, operator, rows, presenceIntervals) : 0;
+    const linkedAbandons = present ? calls.filter((call) => abandonLinkedToOperator(call, operator, rows, presenceIntervals)) : [];
     return { ...baseRaw, availableOpportunities: opportunities, availableTakes: takes, linkedAbandons: linkedAbandons.length, details: uniqueDetails([...inboundCalls, ...linkedAbandons], outgoing), present };
   });
   const data = rawData.map((raw) => {
@@ -172,7 +215,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
     const talkInbound = raw.inboundCalls.reduce((sum, call) => sum + call.talk, 0);
     const talkOutbound = raw.outgoing.reduce((sum, row) => sum + row.talking, 0);
     const talkSeconds = talkInbound + talkOutbound;
-    return { label: raw.operator, inbound: raw.inbound, outbound: raw.outbound, total: totalCalls, sondePrise: raw.present ? `${raw.availableOpportunities} / ${raw.availableTakes}` : 'Non présente', priseRate: raw.present ? pct(raw.availableTakes, raw.availableOpportunities) : 'Non présente', abandons: raw.present ? raw.linkedAbandons : 'Non présente', parking: raw.handledParking, reprisesParking: raw.parkingPickup, rappels: raw.callbackOutbounds, wait: formatClock(waitSeconds), waitAvg: raw.inbound ? formatClock(raw.waitAvg) : '00:00:00', talk: formatClock(talkSeconds), talkAvg: totalCalls ? formatClock(raw.talkAvg) : '00:00:00', internal: formatClock(raw.internalSeconds), work: formatClock(raw.totalWorkSeconds), details: raw.details };
+    return { label: raw.operator, inbound: raw.inbound, outbound: raw.outbound, total: totalCalls, presence: raw.present ? formatClock(raw.presenceSeconds) : 'Non présente', sondePrise: raw.present ? `${raw.availableOpportunities} / ${raw.availableTakes}` : 'Non présente', priseRate: raw.present ? pct(raw.availableTakes, raw.availableOpportunities) : 'Non présente', abandons: raw.present ? raw.linkedAbandons : 'Non présente', parking: raw.handledParking, reprisesParking: raw.parkingPickup, rappels: raw.callbackOutbounds, wait: formatClock(waitSeconds), waitAvg: raw.inbound ? formatClock(raw.waitAvg) : '00:00:00', talk: formatClock(talkSeconds), talkAvg: totalCalls ? formatClock(raw.talkAvg) : '00:00:00', internal: formatClock(raw.internalSeconds), work: formatClock(raw.totalWorkSeconds), details: raw.details };
   }).sort((a, b) => Number(b.total) - Number(a.total));
   const sentimentData = rawData.filter((raw) => raw.present).map((raw) => {
     const sentiment = computeSentiment(raw, rawData);
@@ -181,7 +224,7 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
   return (
     <>
       <Panel title="Analyse operatrices">
-        <DataTable rows={data} columns={[["label", "Operatrice"], ["inbound", "Entrants traites"], ["outbound", "Sortants clients"], ["total", "Total appels"], ["sondePrise", "Dispo / prise"], ["priseRate", "Taux prise dispo"], ["abandons", "Abandons imputables"], ["parking", "Parking"], ["reprisesParking", "Reprises parking"], ["rappels", "Rappels utiles"], ["wait", "Attente totale"], ["waitAvg", "Attente moy."], ["talk", "Parole totale"], ["talkAvg", "Parole moy."], ["internal", "Interne"], ["work", "Temps total"]]} onOpen={(row) => setDetail(row.details)} />
+        <DataTable rows={data} columns={[["label", "Operatrice"], ["presence", "Presence estimee"], ["inbound", "Entrants traites"], ["outbound", "Sortants clients"], ["total", "Total appels"], ["sondePrise", "Dispo / prise"], ["priseRate", "Taux prise dispo"], ["abandons", "Abandons imputables"], ["parking", "Parking"], ["reprisesParking", "Reprises parking"], ["rappels", "Rappels utiles"], ["wait", "Attente totale"], ["waitAvg", "Attente moy."], ["talk", "Parole totale"], ["talkAvg", "Parole moy."], ["internal", "Interne"], ["work", "Temps total"]]} onOpen={(row) => setDetail(row.details)} />
       </Panel>
       <Panel title="Sentiment IA operatrices">
         <DataTable rows={sentimentData} columns={[["label", "Operatrice"], ["sentiment", "Sentiment IA"], ["priseStats", "Prise dispo"], ["abandonStats", "Abandons"], ["attenteStats", "Attente moy."], ["paroleStats", "Parole moy."], ["parkingStats", "Effort parking"], ["repriseParkingStats", "Reprise parking"], ["rappelStats", "Effort rappel"], ["sortantsStats", "Sortants utiles"], ["activiteStats", "Activite relative"], ["sentimentDetail", "Explication NEX"]]} onOpen={(row) => setDetail(row.details)} />
