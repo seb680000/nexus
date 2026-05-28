@@ -8,7 +8,7 @@ type OperatorsViewProps = { calls: CallPath[]; rows: Row[]; setDetail: (rows: De
 type OperatorRawScore = {
   operator: string; inbound: number; outbound: number; probes: number; availableOpportunities: number; availableTakes: number;
   linkedAbandons: number; handledParking: number; parkingPickup: number; callbackOutbounds: number;
-  waitAvg: number; talkAvg: number; internalSeconds: number; totalWorkSeconds: number;
+  waitAvg: number; talkAvg: number; internalSeconds: number; totalWorkSeconds: number; present: boolean;
   details: DetailItem[]; inboundCalls: CallPath[]; outgoing: Row[];
 };
 type ScorePart = { label: string; key: string; score: number; weight: number; formula: string; source: string; interpretation: string; reason: string };
@@ -96,23 +96,33 @@ function totalOperatorActivitySeconds(operator: string, operatorRows: Row[], inb
   const callIntervals = inboundCalls.map(callInterval).filter((value): value is Interval => Boolean(value));
   return mergedDurationSeconds([...rowIntervals, ...callIntervals]);
 }
+function hasRealPresence(raw: Omit<OperatorRawScore, 'present'>) {
+  return raw.totalWorkSeconds > 0 || raw.inbound > 0 || raw.outbound > 0 || raw.handledParking > 0 || raw.parkingPickup > 0 || raw.callbackOutbounds > 0 || raw.internalSeconds > 0;
+}
 function sentimentExplanation(parts: ScorePart[], finalScore: number) {
   const lines = parts.map((part) => `${part.label} : ${part.score.toFixed(1)}/10 · poids ${Math.round(part.weight * 100)}% · ${part.formula} · ${part.source}`);
   return `Sentiment IA final : ${finalScore.toFixed(1)}/10\n${lines.join('\n')}`;
 }
 function computeSentiment(raw: OperatorRawScore, team: OperatorRawScore[]) {
+  if (!raw.present) {
+    return {
+      sentiment: 'Non présente', sentimentValue: -1, sentimentDetail: 'Opératrice non présente sur la période : aucune note Sentiment IA calculée.', sentimentMethod: 'Aucune activité réelle détectée sur la période.',
+      priseScore: 'Non présent', priseScoreMethod: 'Non calculé car opératrice absente.', abandonsScore: 'Non présent', abandonsScoreMethod: 'Non calculé car opératrice absente.', attenteScore: 'Non présent', attenteScoreMethod: 'Non calculé car opératrice absente.', paroleScore: 'Non présent', paroleScoreMethod: 'Non calculé car opératrice absente.', parkingScore: 'Non présent', parkingScoreMethod: 'Non calculé car opératrice absente.', repriseParkingScore: 'Non présent', repriseParkingScoreMethod: 'Non calculé car opératrice absente.', rappelScore: 'Non présent', rappelScoreMethod: 'Non calculé car opératrice absente.', sortantsScore: 'Non présent', sortantsScoreMethod: 'Non calculé car opératrice absente.', activiteScore: 'Non présent', activiteScoreMethod: 'Non calculé car opératrice absente.'
+    };
+  }
+  const activeTeam = team.filter((item) => item.present);
   const availablePickupRate = raw.availableOpportunities ? raw.availableTakes / raw.availableOpportunities : 0;
   const abandonPressure = raw.availableOpportunities ? raw.linkedAbandons / raw.availableOpportunities : raw.linkedAbandons ? 1 : 0;
   const parkingEffort = raw.inbound ? raw.handledParking / raw.inbound : raw.handledParking ? 1 : 0;
   const parkingPickupEffort = raw.inbound ? raw.parkingPickup / raw.inbound : raw.parkingPickup ? 1 : 0;
   const callbackEffort = raw.inbound ? raw.callbackOutbounds / raw.inbound : raw.callbackOutbounds ? 1 : 0;
   const outboundEffort = raw.inbound ? raw.outbound / raw.inbound : raw.outbound ? 1 : 0;
-  const teamWait = median(team.map((item) => item.waitAvg).filter(Boolean));
-  const teamTalk = median(team.map((item) => item.talkAvg).filter(Boolean));
-  const teamParking = median(team.map((item) => (item.inbound ? item.handledParking / item.inbound : 0)));
-  const teamCallback = median(team.map((item) => (item.inbound ? item.callbackOutbounds / item.inbound : 0)));
-  const teamOutbound = median(team.map((item) => (item.inbound ? item.outbound / item.inbound : 0)));
-  const teamActivity = median(team.map((item) => item.totalWorkSeconds).filter(Boolean));
+  const teamWait = median(activeTeam.map((item) => item.waitAvg).filter(Boolean));
+  const teamTalk = median(activeTeam.map((item) => item.talkAvg).filter(Boolean));
+  const teamParking = median(activeTeam.map((item) => (item.inbound ? item.handledParking / item.inbound : 0)));
+  const teamCallback = median(activeTeam.map((item) => (item.inbound ? item.callbackOutbounds / item.inbound : 0)));
+  const teamOutbound = median(activeTeam.map((item) => (item.inbound ? item.outbound / item.inbound : 0)));
+  const teamActivity = median(activeTeam.map((item) => item.totalWorkSeconds).filter(Boolean));
   const parts: ScorePart[] = [
     { key: 'priseScore', label: 'Prise sur disponibilité', score: ratioScore(availablePickupRate), weight: 0.22, formula: 'Formule : appels pris quand l’opératrice était disponible / appels entrants où elle était disponible × 10.', source: `Données : ${raw.availableTakes} prises disponibles / ${raw.availableOpportunities} opportunités disponibles = ${pct(raw.availableTakes, raw.availableOpportunities)}.`, interpretation: 'Mesure la vraie réactivité : les appels internes ne bloquent pas, les appels clients déjà en cours bloquent.', reason: `${raw.availableTakes} appels pris sur ${raw.availableOpportunities} appels où l’opératrice était disponible.` },
     { key: 'abandonsScore', label: 'Abandons pendant disponibilité', score: clamp(10 - abandonPressure * 10), weight: 0.14, formula: 'Formule : 10 - (abandons imputables / opportunités disponibles × 10).', source: `Données : ${raw.linkedAbandons} abandon(s) imputables / ${raw.availableOpportunities} opportunités disponibles.`, interpretation: 'Pénalise les abandons quand l’opératrice était disponible ou seulement en appel interne.', reason: `${raw.linkedAbandons} abandon(s) liés à l’opératrice sur la période.` },
@@ -140,33 +150,21 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
     const probes = probesByOperator.get(operator)?.size || 0;
     const outgoing = outboundRows.filter((row) => row.operator === operator);
     const internals = internalRows.filter((row) => row.operator === operator);
-    const linkedAbandons = calls.filter((call) => abandonLinkedToOperator(call, operator, rows));
     const waitSeconds = inboundCalls.reduce((sum, call) => sum + call.wait, 0);
     const talkInbound = inboundCalls.reduce((sum, call) => sum + call.talk, 0);
     const talkOutbound = outgoing.reduce((sum, row) => sum + row.talking, 0);
     const talkSeconds = talkInbound + talkOutbound;
     const internalSeconds = internals.reduce((sum, row) => sum + row.talking, 0);
-    const opportunities = availableOpportunities(calls, operator, rows);
-    const takes = availableTakes(calls, operator, rows);
-    return {
-      operator,
-      inbound: inboundCalls.length,
-      outbound: outgoing.length,
-      probes,
-      availableOpportunities: opportunities,
-      availableTakes: takes,
-      linkedAbandons: linkedAbandons.length,
-      handledParking: operatorParkingCount(calls, operator),
-      parkingPickup: operatorParkingPickupCount(calls, operator),
-      callbackOutbounds: operatorCallbackCount(rows, operator),
-      waitAvg: inboundCalls.length ? waitSeconds / inboundCalls.length : 0,
-      talkAvg: inboundCalls.length + outgoing.length ? talkSeconds / (inboundCalls.length + outgoing.length) : 0,
-      internalSeconds,
-      totalWorkSeconds: totalOperatorActivitySeconds(operator, rows, inboundCalls),
-      details: uniqueDetails([...inboundCalls, ...linkedAbandons], outgoing),
-      inboundCalls,
-      outgoing,
-    };
+    const handledParking = operatorParkingCount(calls, operator);
+    const parkingPickup = operatorParkingPickupCount(calls, operator);
+    const callbackOutbounds = operatorCallbackCount(rows, operator);
+    const totalWorkSeconds = totalOperatorActivitySeconds(operator, rows, inboundCalls);
+    const baseRaw = { operator, inbound: inboundCalls.length, outbound: outgoing.length, probes, availableOpportunities: 0, availableTakes: 0, linkedAbandons: 0, handledParking, parkingPickup, callbackOutbounds, waitAvg: inboundCalls.length ? waitSeconds / inboundCalls.length : 0, talkAvg: inboundCalls.length + outgoing.length ? talkSeconds / (inboundCalls.length + outgoing.length) : 0, internalSeconds, totalWorkSeconds, details: uniqueDetails(inboundCalls, outgoing), inboundCalls, outgoing };
+    const present = hasRealPresence(baseRaw);
+    const opportunities = present ? availableOpportunities(calls, operator, rows) : 0;
+    const takes = present ? availableTakes(calls, operator, rows) : 0;
+    const linkedAbandons = present ? calls.filter((call) => abandonLinkedToOperator(call, operator, rows)) : [];
+    return { ...baseRaw, availableOpportunities: opportunities, availableTakes: takes, linkedAbandons: linkedAbandons.length, details: uniqueDetails([...inboundCalls, ...linkedAbandons], outgoing), present };
   });
   const data = rawData.map((raw) => {
     const totalCalls = raw.inbound + raw.outbound;
@@ -174,9 +172,9 @@ export function OperatorsView({ calls, rows, setDetail }: OperatorsViewProps) {
     const talkInbound = raw.inboundCalls.reduce((sum, call) => sum + call.talk, 0);
     const talkOutbound = raw.outgoing.reduce((sum, row) => sum + row.talking, 0);
     const talkSeconds = talkInbound + talkOutbound;
-    return { label: raw.operator, inbound: raw.inbound, outbound: raw.outbound, total: totalCalls, sondePrise: `${raw.availableOpportunities} / ${raw.availableTakes}`, priseRate: pct(raw.availableTakes, raw.availableOpportunities), abandons: raw.linkedAbandons, parking: raw.handledParking, reprisesParking: raw.parkingPickup, rappels: raw.callbackOutbounds, wait: formatClock(waitSeconds), waitAvg: raw.inbound ? formatClock(raw.waitAvg) : '00:00:00', talk: formatClock(talkSeconds), talkAvg: totalCalls ? formatClock(raw.talkAvg) : '00:00:00', internal: formatClock(raw.internalSeconds), work: formatClock(raw.totalWorkSeconds), details: raw.details };
-  }).sort((a, b) => b.total - a.total);
-  const sentimentData = rawData.map((raw) => {
+    return { label: raw.operator, inbound: raw.inbound, outbound: raw.outbound, total: totalCalls, sondePrise: raw.present ? `${raw.availableOpportunities} / ${raw.availableTakes}` : 'Non présente', priseRate: raw.present ? pct(raw.availableTakes, raw.availableOpportunities) : 'Non présente', abandons: raw.present ? raw.linkedAbandons : 'Non présente', parking: raw.handledParking, reprisesParking: raw.parkingPickup, rappels: raw.callbackOutbounds, wait: formatClock(waitSeconds), waitAvg: raw.inbound ? formatClock(raw.waitAvg) : '00:00:00', talk: formatClock(talkSeconds), talkAvg: totalCalls ? formatClock(raw.talkAvg) : '00:00:00', internal: formatClock(raw.internalSeconds), work: formatClock(raw.totalWorkSeconds), details: raw.details };
+  }).sort((a, b) => Number(b.total) - Number(a.total));
+  const sentimentData = rawData.filter((raw) => raw.present).map((raw) => {
     const sentiment = computeSentiment(raw, rawData);
     return { label: raw.operator, sentiment: sentiment.sentiment, sentimentValue: sentiment.sentimentValue, sentimentMethod: sentiment.sentimentMethod, priseStats: `${raw.availableTakes} / ${raw.availableOpportunities} (${pct(raw.availableTakes, raw.availableOpportunities)})`, priseScore: sentiment.priseScore, priseScoreMethod: sentiment.priseScoreMethod, abandonStats: `${raw.linkedAbandons} (${pct(raw.linkedAbandons, raw.availableOpportunities)})`, abandonsScore: sentiment.abandonsScore, abandonsScoreMethod: sentiment.abandonsScoreMethod, attenteStats: formatClock(raw.waitAvg), attenteScore: sentiment.attenteScore, attenteScoreMethod: sentiment.attenteScoreMethod, paroleStats: formatClock(raw.talkAvg), paroleScore: sentiment.paroleScore, paroleScoreMethod: sentiment.paroleScoreMethod, parkingStats: `${raw.handledParking} (${pct(raw.handledParking, raw.inbound)})`, parkingScore: sentiment.parkingScore, parkingScoreMethod: sentiment.parkingScoreMethod, repriseParkingStats: raw.parkingPickup, repriseParkingScore: sentiment.repriseParkingScore, repriseParkingScoreMethod: sentiment.repriseParkingScoreMethod, rappelStats: `${raw.callbackOutbounds} (${pct(raw.callbackOutbounds, raw.inbound)})`, rappelScore: sentiment.rappelScore, rappelScoreMethod: sentiment.rappelScoreMethod, sortantsStats: raw.outbound, sortantsScore: sentiment.sortantsScore, sortantsScoreMethod: sentiment.sortantsScoreMethod, activiteStats: formatClock(raw.totalWorkSeconds), activiteScore: sentiment.activiteScore, activiteScoreMethod: sentiment.activiteScoreMethod, sentimentDetail: sentiment.sentimentDetail, details: raw.details };
   }).sort((a, b) => Number(b.sentimentValue) - Number(a.sentimentValue));
